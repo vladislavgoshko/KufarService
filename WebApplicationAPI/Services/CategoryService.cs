@@ -68,18 +68,42 @@ namespace WebApplicationAPI.Services
 
         public List<Category> GetAllCategories()
         {
-            return _categoryData?.Categories?.ToList() ?? new List<Category>();
+            return _categoryData?.Categories?
+                .OrderBy(c => int.TryParse(c.Order, out var order) ? order : int.MaxValue)
+                .Select(c =>
+                {
+                    c.Subcategories = c.Subcategories?
+                        .OrderBy(sc => int.TryParse(sc.Order, out var order) ? order : int.MaxValue)
+                        .ToList() ?? new List<Subcategory>();
+                    return c;
+                })
+                .ToList() ?? new List<Category>();
         }
+
 
         public Category? GetCategoryById(string id)
         {
-            return _categoryData?.Categories?.FirstOrDefault(c => c.Id == id);
+            var category = _categoryData?.Categories?.FirstOrDefault(c => c.Id == id);
+
+            if (category != null && category.Subcategories != null)
+            {
+                category.Subcategories = category.Subcategories
+                    .OrderBy(sc => int.TryParse(sc.Order, out var order) ? order : int.MaxValue)
+                    .ToList();
+            }
+
+            return category;
         }
+
 
         public List<Subcategory> GetSubcategoriesByCategoryId(string categoryId)
         {
-            return _categoryData?.Categories?.FirstOrDefault(c => c.Id == categoryId)
-                                 ?.Subcategories?.ToList() ?? new List<Subcategory>();
+            return _categoryData?.Categories?
+                .FirstOrDefault(c => c.Id == categoryId)?
+                .Subcategories?
+                .OrderBy(sc => int.TryParse(sc.Order, out var order) ? order : int.MaxValue)
+                .ToList() ?? new List<Subcategory>();
         }
+
     }
 }
