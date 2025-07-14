@@ -9,5 +9,9 @@ namespace WebApplicationAPI.Models.Parameter
 
         [JsonPropertyName("labels")]
         public LabelText Labels { get; set; }
+
+        [JsonPropertyName("sub_parameters")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<Parameter>? SubParameters { get; set; }
     }
 }
