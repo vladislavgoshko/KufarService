@@ -1,37 +1,28 @@
-﻿namespace WebApplicationAPI.Models.Category
+﻿using System.Text.Json.Serialization;
+
+namespace WebApplicationAPI.Models.Category
 {
     public class Category
     {
+        [JsonPropertyName("id")]
         public string Id { get; set; }
+
+        [JsonPropertyName("name")]
         public string Name { get; set; }
+
+        [JsonPropertyName("name_ru")]
         public string Name_ru { get; set; }
+
+        [JsonPropertyName("name_by")]
         public string Name_by { get; set; }
+
+        [JsonPropertyName("version")]
         public string Version { get; set; }
+
+        [JsonPropertyName("order")]
         public string Order { get; set; }
+
+        [JsonPropertyName("subcategories")]
         public List<Subcategory> Subcategories { get; set; }
-
-        // Конструктор
-        public Category(string id, string name, string name_ru, string name_by, string version, string order, List<Subcategory> subcategories)
-        {
-            Id = id;
-            Name = name;
-            Name_ru = name_ru;
-            Name_by = name_by;
-            Version = version;
-            Order = order;
-            Subcategories = subcategories ?? new List<Subcategory>(); // Инициализация списка, если он null
-        }
-
-        // Конструктор без подкатегорий (на случай, если они не всегда есть)
-        public Category(string id, string name, string name_ru, string name_by, string version, string order)
-            : this(id, name, name_ru, name_by, version, order, null) // Вызываем основной конструктор с null для подкатегорий
-        {
-        }
-
-        // Конструктор по умолчанию (без параметров)
-        public Category()
-        {
-            Subcategories = new List<Subcategory>();
-        }
     }
 }

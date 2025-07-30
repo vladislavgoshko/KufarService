@@ -1,35 +1,28 @@
-﻿namespace WebApplicationAPI.Models.Category
+﻿using System.Text.Json.Serialization;
+
+namespace WebApplicationAPI.Models.Category
 {
     public class Subcategory
     {
+        [JsonPropertyName("id")]
         public string Id { get; set; }
+
+        [JsonPropertyName("parent")]
         public string Parent { get; set; }
+
+        [JsonPropertyName("order")]
         public string Order { get; set; }
+
+        [JsonPropertyName("name")]
         public string Name { get; set; }
+
+        [JsonPropertyName("name_ru")]
         public string Name_ru { get; set; }
+
+        [JsonPropertyName("name_by")]
         public string Name_by { get; set; }
+
+        [JsonPropertyName("redirect")]
         public string? Redirect { get; set; }
-
-        /// <summary>
-        /// Конструктор для создания экземпляра Subcategory со всеми свойствами.
-        /// </summary>
-        public Subcategory(string id, string parent, string order, string name, string name_ru, string name_by, string? redirect = null)
-        {
-            Id = id;
-            Parent = parent;
-            Order = order;
-            Name = name;
-            Name_ru = name_ru;
-            Name_by = name_by;
-            Redirect = redirect;
-        }
-
-        /// <summary>
-        /// Конструктор по умолчанию. Необходим для десериализации JSON.
-        /// </summary>
-        public Subcategory()
-        {
-            // Пустой конструктор по умолчанию
-        }
     }
 }

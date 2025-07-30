@@ -8,12 +8,12 @@ namespace WebApplicationAPI.Models.Parameter
         public string DispatchType { get; set; }
 
         [JsonPropertyName("deduplication_key")]
-        public string DedupicationKey { get; set; } // Может быть null, поэтому string
+        public string DedupicationKey { get; set; }
 
         [JsonPropertyName("refs")]
-        public Dictionary<string, Parameter> Refs { get; set; } // Справочник всех параметров
+        public Dictionary<string, Parameter> Refs { get; set; }
         
         [JsonPropertyName("rules")]
-        public List<RuleInfo> Rules { get; set; } // Список правил
+        public List<RuleInfo> Rules { get; set; }
     }
 }

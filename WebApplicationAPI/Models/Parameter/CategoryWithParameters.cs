@@ -1,14 +1,16 @@
-﻿namespace WebApplicationAPI.Models.Parameter
+﻿using System.Text.Json.Serialization;
+
+namespace WebApplicationAPI.Models.Parameter
 {
     public class CategoryWithParameters
     {
+        [JsonPropertyName("category_name")]
         public string CategoryName { get; set; }
-        public Dictionary<string, string> Rule { get; set; }
-        public List<Parameter> Parameters { get; set; }
 
-        public CategoryWithParameters()
-        {
-            Parameters = new List<Parameter>();
-        }
+        [JsonPropertyName("rule")]
+        public Dictionary<string, string> Rule { get; set; }
+
+        [JsonPropertyName("parameters")]
+        public List<Parameter> Parameters { get; set; }
     }
 }
