@@ -27,7 +27,7 @@ namespace WebApplicationAPI
             // with features like automatic retry, proper connection management, etc.
             // It will also create an HttpClient instance for ParameterMetadataService.
             builder.Services.AddHttpClient<ParameterService>();
-
+            builder.Services.AddHttpClient<SearchAdService>();
             // Register your services as singletons.
             // ParameterMetadataService now manages its own caching and fetches data on demand.
             // CategoryService still loads data from a file, so it also benefits from being a singleton
