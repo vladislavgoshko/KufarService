@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using WebApplicationAPI.Models.Ad;
+using WebApplicationAPI.Models.SearchAd;
 using WebApplicationAPI.Services;
 
 namespace WebApplicationAPI.Controllers
@@ -24,13 +25,13 @@ namespace WebApplicationAPI.Controllers
         /// Получает список объявлений с Kufar API.
         /// </summary>
         /// <returns>Список объявлений.</returns>
-        [HttpGet] // GET /api/ad/{categoryId}
+        [HttpPost] // GET /api/ad/{categoryId}
 
-        public async Task<ActionResult<List<Ad>>> SearchAds(int? categoryId, string? cursor, int? size)
+        public async Task<ActionResult<List<Ad>>> SearchAds(int? size, string? cursor, string? filters)
         {
             try
             {
-                var adsPage = await _adService.SearchAdsAsync(categoryId, cursor, size);
+                var adsPage = await _adService.SearchAdsAsync(size, cursor, filters);
 
                 if (adsPage == null || (adsPage.Ads?.Count) == 0)
                 {
