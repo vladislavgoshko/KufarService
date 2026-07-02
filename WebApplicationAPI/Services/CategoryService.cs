@@ -10,40 +10,40 @@ namespace WebApplicationAPI.Services
     {
         private CategoryData _categoryData;
         private readonly IWebHostEnvironment _env;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public CategoryService(IWebHostEnvironment env)
+        public CategoryService(IWebHostEnvironment env, IHttpClientFactory httpClientFactory)
         {
             _env = env;
+            _httpClientFactory = httpClientFactory;
         }
 
-        public async Task LoadCategoriesAsync()
+        private async Task<string> FetchCategoryDataJsonAsync()
         {
-            string filePath = Path.Combine(_env.ContentRootPath, "categories.json");
+            string url = "https://api.kufar.by/category-tree/v1/category_tree";
+            var client = _httpClientFactory.CreateClient();
+            var response = await client.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsStringAsync();
+        }
 
-            if (!File.Exists(filePath))
-            {
-                throw new FileNotFoundException($"Файл категорий не найден: {filePath}");
-            }
-
-            string jsonString = await File.ReadAllTextAsync(filePath, Encoding.UTF8);
-
-            var options = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            };
-
+        public async Task<List<Category>> GetAllCategoriesAsync()
+        {
             try
             {
-                _categoryData = JsonSerializer.Deserialize<CategoryData>(jsonString, options);
+                var jsonString = await FetchCategoryDataJsonAsync();
 
-                // --- IMPORTANT: SORTING LOGIC ADDED HERE ---
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                _categoryData = JsonSerializer.Deserialize<CategoryData>(jsonString, options);
 
                 if (_categoryData?.Categories != null)
                 {
-                    // Sort the main categories by Id (string comparison)
                     _categoryData.Categories = _categoryData.Categories.OrderBy(c => c.Id).ToList();
 
-                    // Sort subcategories within each category by Id (string comparison)
                     foreach (var category in _categoryData.Categories)
                     {
                         if (category.Subcategories != null)
@@ -53,8 +53,16 @@ namespace WebApplicationAPI.Services
                     }
                 }
 
-                // --- END SORTING LOGIC ---
-
+                return _categoryData?.Categories?
+                    .OrderBy(c => int.TryParse(c.Order, out var order) ? order : int.MaxValue)
+                    .Select(c =>
+                    {
+                        c.Subcategories = c.Subcategories?
+                            .OrderBy(sc => int.TryParse(sc.Order, out var order) ? order : int.MaxValue)
+                            .ToList() ?? new List<Subcategory>();
+                        return c;
+                    })
+                    .ToList() ?? new List<Category>();
             }
             catch (JsonException ex)
             {
@@ -62,48 +70,8 @@ namespace WebApplicationAPI.Services
             }
             catch (Exception ex)
             {
-                throw new InvalidOperationException($"Произошла ошибка при загрузке файла категорий: {ex.Message}", ex);
+                throw new InvalidOperationException($"Произошла ошибка при загрузке категорий: {ex.Message}", ex);
             }
         }
-
-        public List<Category> GetAllCategories()
-        {
-            return _categoryData?.Categories?
-                .OrderBy(c => int.TryParse(c.Order, out var order) ? order : int.MaxValue)
-                .Select(c =>
-                {
-                    c.Subcategories = c.Subcategories?
-                        .OrderBy(sc => int.TryParse(sc.Order, out var order) ? order : int.MaxValue)
-                        .ToList() ?? new List<Subcategory>();
-                    return c;
-                })
-                .ToList() ?? new List<Category>();
-        }
-
-
-        public Category? GetCategoryById(string id)
-        {
-            var category = _categoryData?.Categories?.FirstOrDefault(c => c.Id == id);
-
-            if (category != null && category.Subcategories != null)
-            {
-                category.Subcategories = category.Subcategories
-                    .OrderBy(sc => int.TryParse(sc.Order, out var order) ? order : int.MaxValue)
-                    .ToList();
-            }
-
-            return category;
-        }
-
-
-        public List<Subcategory> GetSubcategoriesByCategoryId(string categoryId)
-        {
-            return _categoryData?.Categories?
-                .FirstOrDefault(c => c.Id == categoryId)?
-                .Subcategories?
-                .OrderBy(sc => int.TryParse(sc.Order, out var order) ? order : int.MaxValue)
-                .ToList() ?? new List<Subcategory>();
-        }
-
     }
 }

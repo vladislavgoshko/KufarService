@@ -50,7 +50,6 @@ namespace WebApplicationAPI.Models.Parameter
         [JsonPropertyName("ui_component")]
         public UIComponent UIComponent { get; set; }
 
-        // добавленные свойства
         [JsonPropertyName("actions")]
         public List<ParameterAction> Actions { get; set; }
 

@@ -7,7 +7,7 @@ namespace WebApplicationAPI.Models.Parameter
         [JsonPropertyName("parameters")]
         public ParametersContainer Parameters { get; set; }
 
-        [JsonPropertyName("parameters_order")] // Теперь это корректное свойство
+        [JsonPropertyName("parameters_order")]
         public ParametersOrderContainer ParametersOrder { get; set; }
     }
 }

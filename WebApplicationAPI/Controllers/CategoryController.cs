@@ -24,46 +24,14 @@ namespace WebApplicationAPI.Controllers
         /// </summary>
         /// <returns>Список категорий.</returns>
         [HttpGet] // Определяет, что этот метод отвечает на GET-запросы
-        public ActionResult<IEnumerable<Category>> GetCategories()
+        public async Task<ActionResult<IEnumerable<Category>>> GetCategories()
         {
-            var categories = _categoryService.GetAllCategories();
+            var categories = await _categoryService.GetAllCategoriesAsync();
             if (!categories.Any())
             {
                 return NotFound("Категории не найдены."); // Возвращаем 404, если данных нет
             }
             return Ok(categories); // Возвращаем 200 OK со списком категорий
-        }
-
-        /// <summary>
-        /// Получает категорию по ее ID.
-        /// </summary>
-        /// <param name="id">ID категории.</param>
-        /// <returns>Категория или 404 Not Found.</returns>
-        [HttpGet("{id}")] // Маршрут будет выглядеть как /api/categories/{id}
-        public ActionResult<Category> GetCategoryById(string id)
-        {
-            var category = _categoryService.GetCategoryById(id);
-            if (category == null)
-            {
-                return NotFound($"Категория с ID {id} не найдена.");
-            }
-            return Ok(category);
-        }
-
-        /// <summary>
-        /// Получает подкатегории для указанной категории по ID.
-        /// </summary>
-        /// <param name="categoryId">ID родительской категории.</param>
-        /// <returns>Список подкатегорий или 404 Not Found.</returns>
-        [HttpGet("{categoryId}/subcategories")] // Маршрут /api/categories/{categoryId}/subcategories
-        public ActionResult<IEnumerable<Subcategory>> GetSubcategories(string categoryId)
-        {
-            var subcategories = _categoryService.GetSubcategoriesByCategoryId(categoryId);
-            if (!subcategories.Any())
-            {
-                return NotFound($"Подкатегории для категории с ID {categoryId} не найдены.");
-            }
-            return Ok(subcategories);
         }
     }
 }

@@ -38,14 +38,12 @@ namespace WebApplicationAPI.Controllers
 
                 if (parameters == null)
                 {
-                    _logger.LogWarning($"No specific unified category data found for ID: {categoryId}");
                     return NotFound($"Объединенные данные категории для ID {categoryId} не найдены.");
                 }
                 return Ok(parameters);
             }
             catch (System.Exception ex)
             {
-                _logger.LogError(ex, $"Error getting category parameters by ID {categoryId}.");
                 return StatusCode(500, "Произошла внутренняя ошибка сервера при получении параметров категории по ID.");
             }
         }

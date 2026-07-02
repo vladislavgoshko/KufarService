@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging;
 using WebApplicationAPI.Models.Ad;
-using WebApplicationAPI.Models.SearchAd;
 
 namespace WebApplicationAPI.Services
 {
@@ -37,14 +36,12 @@ namespace WebApplicationAPI.Services
                 $"&{filters}" +
                 $"&sort=lst.d"
                 ;
-            _logger.LogInformation("URL: " + url);
             try
             {
                 HttpResponseMessage response = await _httpClient.GetAsync(url);
                 response.EnsureSuccessStatusCode();
 
                 string json = await response.Content.ReadAsStringAsync();
-                _logger.LogInformation($"Fetched ads. JSON length: {json.Length}");
 
                 var options = new JsonSerializerOptions
                 {
@@ -65,17 +62,14 @@ namespace WebApplicationAPI.Services
             }
             catch (HttpRequestException ex)
             {
-                _logger.LogError(ex, $"Ошибка HTTP при получении объявлений");
                 throw;
             }
             catch (JsonException ex)
             {
-                _logger.LogError(ex, $"Ошибка десериализации JSON при получении объявлений");
                 throw;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Непредвиденная ошибка при получении объявлений");
                 throw;
             }
         }
