@@ -26,7 +26,29 @@ public class MainCallbackHandler : IBotHandler
 
         if (callback.Data == "exit")
         {
-            await botClient.DeleteMessage(message.Chat.Id, message.Id, ct);
+            try
+            {
+                await botClient.DeleteMessage(message.Chat.Id, message.Id, ct);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Не удалось удалить сообщение: {ex.Message}");
+                // Если не удаётся удалить, пытаемся отредактировать
+                try
+                {
+                    await botClient.EditMessageText(
+                        chatId: message.Chat.Id,
+                        messageId: message.Id,
+                        text: "✅ Закрыто",
+                        cancellationToken: ct,
+                        replyMarkup: null
+                    );
+                }
+                catch
+                {
+                    // Если и это не работает, просто игнорируем
+                }
+            }
             return;
         }
 
