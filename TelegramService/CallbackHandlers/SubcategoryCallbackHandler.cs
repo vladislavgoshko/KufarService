@@ -37,11 +37,12 @@ namespace TelegramService.CallbackHandlers
                 int.TryParse(idString, out id);
             }
 
-            var subcategories = _categoryService.GetSubcategories(id);
+            //var subcategories = _categoryService.GetSubcategories(id);
             IEnumerable<IEnumerable<InlineKeyboardButton>> buttons = new[] {
                 new InlineKeyboardButton[]
                 {
-                    ("Назад", $"category{_categoryService.GetCategoryIdBySubcategory(id)}", KeyboardButtonStyle.Danger)
+                    ("Назад", $"category{id / 1000 * 1000}", KeyboardButtonStyle.Danger)
+                    //("Назад", $"category{_categoryService.GetCategoryIdBySubcategory(id)}", KeyboardButtonStyle.Danger)
                 }
             };
 
