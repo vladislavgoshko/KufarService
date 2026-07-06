@@ -73,12 +73,6 @@ namespace WebApplicationAPI.Services
                 throw;
             }
         }
-
-        private class CachedAds
-        {
-            public List<Ad> Ads { get; set; } = new();
-            public DateTimeOffset LastUpdated { get; set; }
-        }
     }
 
 }
