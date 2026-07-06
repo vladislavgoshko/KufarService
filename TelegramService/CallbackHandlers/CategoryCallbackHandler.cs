@@ -6,11 +6,11 @@ using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
-using TelegramService.BusinessLogic;
+using TelegramService.Services;
 
 namespace TelegramService.CallbackHandlers
 {
-    internal class CategoryCallbackHandler : IBotHandler
+    internal class CategoryCallbackHandler : CallbackQueryHandlerBase
     {
         private readonly CategoryService _categoryService;
         private Regex _categoryRegex = new(@"^category(?<id>\d+$)", RegexOptions.Compiled);
@@ -20,11 +20,10 @@ namespace TelegramService.CallbackHandlers
             this._categoryService = categoryService;
         }
 
-        public bool CanHandle(Update update) => update.Type == UpdateType.CallbackQuery && _categoryRegex.IsMatch(update.CallbackQuery!.Data!);
+        protected override bool CanHandle(CallbackQuery callbackQuery) =>  _categoryRegex.IsMatch(callbackQuery!.Data!);
 
-        public async Task ExecuteAsync(Update update, ITelegramBotClient botClient, CancellationToken ct)
+        protected override async Task ExecuteAsync(CallbackQuery callback, ITelegramBotClient botClient, CancellationToken ct)
         {
-            var callback = update.CallbackQuery!;
 
             await botClient.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 

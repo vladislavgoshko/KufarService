@@ -2,8 +2,9 @@
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using TelegramService;
 using TelegramService.BusinessLogic;
-public class MainCallbackHandler : IBotHandler
+public class MainCallbackHandler : CallbackQueryHandlerBase
 {
     InlineKeyboardMarkup _back_to_menu = new[]
     {
@@ -11,12 +12,11 @@ public class MainCallbackHandler : IBotHandler
             ("Назад", "back_to_menu", KeyboardButtonStyle.Danger)
         }
     };
-    
-    public bool CanHandle(Update update) => update.Type == UpdateType.CallbackQuery;
 
-    public async Task ExecuteAsync(Update update, ITelegramBotClient botClient, CancellationToken ct)
+    protected override bool CanHandle(CallbackQuery callbackQuery) => true;
+
+    protected override async Task ExecuteAsync(CallbackQuery callback, ITelegramBotClient botClient, CancellationToken ct)
     {
-        var callback = update.CallbackQuery!;
 
         await botClient.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 

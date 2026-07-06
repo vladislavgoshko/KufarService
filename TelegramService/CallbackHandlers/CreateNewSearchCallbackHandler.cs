@@ -6,24 +6,27 @@ using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
 using TelegramService.BusinessLogic;
+using TelegramService.Services;
 
 namespace TelegramService.CallbackHandlers
 {
-    internal class CreateNewSearchCallbackHandler : IBotHandler
+    internal class CreateNewSearchCallbackHandler : CallbackQueryHandlerBase
     {
+        private readonly CategoryService _categoryService;
         private List<Category> _categories;
 
-        public CreateNewSearchCallbackHandler()
+        public CreateNewSearchCallbackHandler(CategoryService categoryService)
         {
-            _categories = new CategoryService().GetCategories(); // сделать потом инъекцию
+            //_categories = new CategoryService(apiURLBase).GetCategories(); // #TODO сделать потом инъекцию
+            _categoryService = categoryService;
+            _categories = _categoryService.GetCategories();
         }
 
-        public bool CanHandle(Update update) => update.Type == UpdateType.CallbackQuery && update.CallbackQuery!.Data == "create_new_search";
+        protected override bool CanHandle(CallbackQuery callbackQuery) => callbackQuery!.Data == "create_new_search";
 
 
-        public async Task ExecuteAsync(Update update, ITelegramBotClient botClient, CancellationToken ct)
+        protected override async Task ExecuteAsync(CallbackQuery callback, ITelegramBotClient botClient, CancellationToken ct)
         {
-            var callback = update.CallbackQuery!;
 
             await botClient.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 

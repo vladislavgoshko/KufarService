@@ -1,23 +1,24 @@
 ﻿using Telegram.Bot;
 using Telegram.Bot.Types;
-using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
-using static System.Net.Mime.MediaTypeNames;
+using TelegramService;
 
-public class BackToMenuCallbackHandler : IBotHandler
+public class BackToMenuCallbackHandler : CallbackQueryHandlerBase
 {
     private readonly InlineKeyboardMarkup _menu = new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("🔍 Создать отслеживание", "create_new_search") },
         new[] { InlineKeyboardButton.WithCallbackData("📋 Текущие заказы", "view_existing") },
-        new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О боте", "about"), ("Выход", "exit", KeyboardButtonStyle.Danger)}
+        new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О боте", "about"), InlineKeyboardButton.WithCallbackData("Выход", "exit") }
     });
-    public bool CanHandle(Update update) => update.Type == UpdateType.CallbackQuery && update.CallbackQuery!.Data == "back_to_menu";
 
-    public async Task ExecuteAsync(Update update, ITelegramBotClient botClient, CancellationToken ct)
+    // Проверяем только то, что относится к логике этого хэндлера
+    protected override bool CanHandle(CallbackQuery callbackQuery) =>
+        callbackQuery.Data == "back_to_menu";
+
+    // Работаем напрямую с CallbackQuery
+    protected override async Task ExecuteAsync(CallbackQuery callback, ITelegramBotClient botClient, CancellationToken ct)
     {
-        var callback = update.CallbackQuery!;
-
         await botClient.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
 
         var message = callback.Message!;
@@ -28,6 +29,6 @@ public class BackToMenuCallbackHandler : IBotHandler
             text: "Добро пожаловать! Выберите действие:",
             cancellationToken: ct,
             replyMarkup: _menu
-            );
+        );
     }
 }
