@@ -1,5 +1,6 @@
 using System.Text.Json;
 using CoreAPI.Models;
+using TelegramService;
 
 namespace CoreAPI.Services
 {
@@ -12,15 +13,16 @@ namespace CoreAPI.Services
         private readonly HttpClient _httpClient;
         private readonly ILogger<CategoryCacheService> _logger;
         private List<Category> _categoriesCache;
-        private const string WebApiBaseUrl = "https://localhost:7275";
+        private string WebApiBaseUrl = "https://localhost:7275";
 
-        public CategoryCacheService(ILogger<CategoryCacheService> logger)
+        public CategoryCacheService(ILogger<CategoryCacheService> logger, ApiSettings apiSettings)
         {
             _logger = logger;
             var handler = new HttpClientHandler();
             handler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
             _httpClient = new HttpClient(handler);
             _categoriesCache = new List<Category>();
+            WebApiBaseUrl = apiSettings.BaseUrl;
         }
 
         /// <summary>

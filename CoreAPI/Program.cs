@@ -1,6 +1,7 @@
 
-using Scalar.AspNetCore;
 using CoreAPI.Services;
+using Scalar.AspNetCore;
+using TelegramService;
 
 namespace CoreAPI
 {
@@ -20,6 +21,15 @@ namespace CoreAPI
             builder.Services.AddControllers();
             // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
             builder.Services.AddOpenApi();
+
+            builder.Services.AddSingleton(new ApiSettings { BaseUrl = "http://localhost:5000" });
+
+
+            // Регистрация сервисов отслеживания объявлений
+            builder.Services.AddSingleton<AdSearchService>();
+
+
+            builder.Services.AddSingleton<AdTrackingService>();
 
             // Регистрация CategoryCacheService как Singleton
             builder.Services.AddSingleton<CategoryCacheService>();
@@ -44,7 +54,8 @@ namespace CoreAPI
 
             app.MapControllers();
 
-            app.Run();
+            app.Run("http://localhost:5080");
+            //app.Run();
         }
     }
 }
