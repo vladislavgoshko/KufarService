@@ -4,26 +4,28 @@ using System.Text;
 using System.Text.Json;
 using System.Net.Http;
 using System.Threading.Tasks;
+using TelegramService.BusinessLogic;
 
-namespace TelegramService.BusinessLogic
+namespace TelegramService.Services
 {
     internal class CategoryService
     {
         private readonly HttpClient _httpClient;
-        private const string CoreApiBaseUrl = "https://localhost:7226";
+        private string CoreApiBaseUrl = "http://localhost:5001";
 
-        public CategoryService()
+        public CategoryService(ApiSettings apiSettings)
         {
             var handler = new HttpClientHandler();
             handler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
             _httpClient = new HttpClient(handler);
+            CoreApiBaseUrl = apiSettings.BaseUrl;
         }
 
         public List<Category> GetCategories()
         {
             try
             {
-                Thread.Sleep(5000);
+                //Thread.Sleep(5000);
                 var response = _httpClient.GetAsync($"{CoreApiBaseUrl}/api/categories").Result;
 
                 if (response.IsSuccessStatusCode)
