@@ -8,12 +8,14 @@ namespace CoreAPI.Controllers
     [ApiController]
     public class AdController : ControllerBase
     {
+        private const string WebApiBaseUrl = "https://localhost:7275";
+
         // GET: api/<AdController>
         [HttpGet]
         public async Task<IEnumerable<string>> Get()
         {
             using HttpClient httpClient = new HttpClient();
-            HttpResponseMessage responseMessage = await httpClient.GetAsync("https://localhost:7275/api/SearchAd?size=5&filters=cat=16010");
+            HttpResponseMessage responseMessage = await httpClient.GetAsync($"{WebApiBaseUrl}/api/SearchAd?size=5&filters=cat=16010");
             if (responseMessage.IsSuccessStatusCode)
             {
                 string res = await responseMessage.Content.ReadAsStringAsync();
