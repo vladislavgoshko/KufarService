@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using KufarBot.Core.Filters;
 using KufarBot.Core.Http.Dto;
 using KufarBot.Core.Models;
 
@@ -86,5 +87,19 @@ public class KufarApiClient : IKufarApiClient
         }
 
         return categories.OrderBy(c => c.Order).ToList();
+    }
+
+    public async Task<IReadOnlyList<FilterSpec>> GetFiltersForCategoryAsync(int categoryId, CancellationToken ct = default)
+    {
+        string url =
+            $"https://api.kufar.by/taxonomy-proxy/v1/dispatch?routing=web_generalist&application=ad_listing&platform=web&taxonomy-version=1&parent={categoryId}";
+
+        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        var dispatch = await JsonSerializer.DeserializeAsync<KufarParametersResponseDto>(stream, JsonOptions, ct);
+
+        return FilterSpecFactory.FromDispatch(dispatch);
     }
 }

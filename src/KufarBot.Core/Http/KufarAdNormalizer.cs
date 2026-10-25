@@ -17,6 +17,7 @@ public static class KufarAdNormalizer
         (string? region, string? area, string location) = ExtractLocation(dto.AdParameters);
         List<string> imageUrls = ExtractImageUrls(dto.Images);
         DateTime listTimeUtc = ParseDateTimeUtc(dto.ListTime);
+        List<AdParameter> parameters = ExtractParameters(dto.AdParameters);
 
         return new Advertisement
         {
@@ -34,7 +35,9 @@ public static class KufarAdNormalizer
             ImageUrl = imageUrls.FirstOrDefault(),
             AllImageUrls = imageUrls,
             ListTimeUtc = listTimeUtc,
-            CategoryId = dto.Category
+            CategoryId = dto.Category,
+            CompanyAd = dto.CompanyAd,
+            Parameters = parameters
         };
     }
 
@@ -156,9 +159,71 @@ public static class KufarAdNormalizer
         return result;
     }
 
-    public static DateTime ParseDateTimeUtc(string? rawDateTime)
+    /// <summary>
+    /// Builds a string-normalized snapshot of ad parameters so saved filters can be
+    /// matched against any ad without hitting the taxonomy API again.
+    /// </summary>
+    public static List<AdParameter> ExtractParameters(List<KufarAdParameterDto>? parameters)
     {
-        if (string.IsNullOrWhiteSpace(rawDateTime))
+        if (parameters == null || parameters.Count == 0)
+        {
+            return new List<AdParameter>();
+        }
+
+        var result = new List<AdParameter>(parameters.Count);
+        foreach (var p in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(p.ParameterName))
+            {
+                continue;
+            }
+
+            string? value = NormalizeParameterValue(p.Value);
+            if (value == null)
+            {
+                continue;
+            }
+
+            string? label = TryNormalizeParameterValue(p.ValueLabel);
+            result.Add(new AdParameter(p.ParameterName.Trim(), value, label));
+        }
+
+        return result;
+    }
+
+    public static string? NormalizeParameterValue(object? raw)
+    {
+        var normalized = TryNormalizeParameterValue(raw);
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
+    }
+
+    private static string? TryNormalizeParameterValue(object? raw)
+    {
+        if (raw == null)
+        {
+            return null;
+        }
+
+        if (raw is bool b)
+        {
+            return b ? "1" : "0";
+        }
+
+        var s = raw.ToString()?.Trim();
+        if (string.IsNullOrWhiteSpace(s))
+        {
+            return null;
+        }
+
+        // bool values sometimes arrive as strings "true"/"false"
+        if (string.Equals(s, "true", StringComparison.OrdinalIgnoreCase)) return "1";
+        if (string.Equals(s, "false", StringComparison.OrdinalIgnoreCase)) return "0";
+
+        return s;
+    }
+
+    public static DateTime ParseDateTimeUtc(string? rawDateTime)
+    {        if (string.IsNullOrWhiteSpace(rawDateTime))
         {
             return DateTime.UtcNow;
         }

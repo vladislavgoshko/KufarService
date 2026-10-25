@@ -31,6 +31,9 @@ public class UserSearchEntity
     public bool IsPaused { get; set; } = false;
     public DateTime CreatedAtUtc { get; set; }
     public DateTime UpdatedAtUtc { get; set; }
+
+    /// <summary>JSON array of SavedFilter (KufarBot.Core.Filters). "[]" = no filters.</summary>
+    public string FiltersJson { get; set; } = "[]";
 }
 
 public class PollingFeedEntity

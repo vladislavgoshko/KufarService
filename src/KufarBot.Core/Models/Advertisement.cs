@@ -18,6 +18,12 @@ public record Advertisement
     public IReadOnlyList<string> AllImageUrls { get; init; } = Array.Empty<string>();
     public required DateTime ListTimeUtc { get; init; }
     public string? CategoryId { get; init; }
+    public bool? CompanyAd { get; init; }
+    public IReadOnlyList<AdParameter> Parameters { get; init; } = Array.Empty<AdParameter>();
+
+    /// <summary>Title + description, for keyword-based custom filters.</summary>
+    public string SearchableText =>
+        string.IsNullOrWhiteSpace(Description) ? Title ?? "" : $"{Title} {Description}";
 
     public string FormattedPrice =>
         PriceByn switch

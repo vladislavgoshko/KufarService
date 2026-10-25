@@ -1,12 +1,14 @@
 using System;
+using System.Linq;
 using System.Text.Json;
+using KufarBot.Core.Filters;
 using KufarBot.Core.Models;
 
 namespace KufarBot.Infrastructure.Persistence;
 
 public static class SearchMatchingExtensions
 {
-    public static bool Matches(this UserSearchEntity search, Advertisement ad)
+    public static bool Matches(this UserSearchEntity search, Advertisement ad, DateTime? utcNow = null)
     {
         ArgumentNullException.ThrowIfNull(search);
         ArgumentNullException.ThrowIfNull(ad);
@@ -27,7 +29,110 @@ public static class SearchMatchingExtensions
             }
         }
 
+        foreach (var filter in SavedFilter.Deserialize(search.FiltersJson))
+        {
+            if (!MatchesFilter(filter, ad, utcNow ?? DateTime.UtcNow))
+            {
+                return false;
+            }
+        }
+
         return true;
+    }
+
+    private static bool MatchesFilter(SavedFilter filter, Advertisement ad, DateTime utcNow)
+    {
+        switch (filter.Kind)
+        {
+            case SavedFilterKind.KeywordsInclude:
+                return filter.Values.Any() &&
+                       filter.Values.Any(k => ContainsIgnoreCase(ad.SearchableText, k));
+
+            case SavedFilterKind.KeywordsExclude:
+                return !filter.Values.Any(k => ContainsIgnoreCase(ad.SearchableText, k));
+
+            case SavedFilterKind.SellerType:
+                if (string.Equals(filter.Values.FirstOrDefault(), "company", StringComparison.OrdinalIgnoreCase))
+                {
+                    return ad.CompanyAd == true;
+                }
+                return ad.CompanyAd != true; // "private"
+
+            case SavedFilterKind.MaxAgeHours:
+                return ad.ListTimeUtc >= utcNow - TimeSpan.FromHours((double)filter.Min!.Value);
+
+            case SavedFilterKind.Bool:
+                return AdParameterValue(ad, filter.Key) == "1" && filter.Values.Contains("1");
+
+            case SavedFilterKind.Single:
+                return MatchesValue(ad, filter.Key, filter.Values, any: true);
+
+            case SavedFilterKind.Multi:
+                return filter.MultiEnabled()
+                    ? MatchesValue(ad, filter.Key, filter.Values, any: true)
+                    : MatchesValue(ad, filter.Key, filter.Values, any: false);
+
+            case SavedFilterKind.Range:
+                return MatchesNumericRange(ad, filter.Key, filter.Min, filter.Max);
+
+            case SavedFilterKind.Text:
+                var adValue = AdParameterValue(ad, filter.Key);
+                return adValue != null && ContainsIgnoreCase(adValue, filter.Values.FirstOrDefault() ?? "");
+
+            default:
+                return true;
+        }
+    }
+
+    // NOTE: Multi SavedFilters from the bot's own UI default to "any of" semantics
+    // (Kufar's multiselect_or); a separate "All" flag can be added later.
+    private static bool MultiEnabled(this SavedFilter _) => true;
+
+    private static bool MatchesValue(Advertisement ad, string parameterName, IReadOnlyList<string> expected, bool any)
+    {
+        var actual = AdParameterValue(ad, parameterName);
+        if (actual == null)
+        {
+            return false;
+        }
+
+        return any
+            ? expected.Contains(actual, StringComparer.OrdinalIgnoreCase)
+            : expected.All(e => ContainsIgnoreCase(actual, e));
+    }
+
+    private static bool MatchesNumericRange(Advertisement ad, string parameterName, decimal? min, decimal? max)
+    {
+        var value = AdParameterValue(ad, parameterName);
+        if (value == null || !decimal.TryParse(value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out decimal numeric))
+        {
+            return false;
+        }
+
+        if (min.HasValue && numeric < min.Value)
+        {
+            return false;
+        }
+
+        if (max.HasValue && numeric > max.Value)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string? AdParameterValue(Advertisement ad, string parameterName)
+    {
+        var param = ad.Parameters.FirstOrDefault(p =>
+            string.Equals(p.Name, parameterName, StringComparison.OrdinalIgnoreCase));
+        return param?.Value;
+    }
+
+    private static bool ContainsIgnoreCase(string source, string fragment)
+    {
+        return source.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     public static List<long> DeserializeIds(string? json)

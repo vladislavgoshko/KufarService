@@ -38,6 +38,9 @@ public class KufarAdDto
     [JsonPropertyName("remuneration_type")]
     public string? RemunerationType { get; set; }
 
+    [JsonPropertyName("company_ad")]
+    public bool? CompanyAd { get; set; }
+
     [JsonPropertyName("ad_parameters")]
     public List<KufarAdParameterDto>? AdParameters { get; set; }
 

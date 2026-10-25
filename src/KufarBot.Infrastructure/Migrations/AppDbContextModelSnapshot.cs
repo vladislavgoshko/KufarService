@@ -165,6 +165,10 @@ namespace KufarBot.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("FiltersJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsPaused")
                         .HasColumnType("INTEGER");
 
