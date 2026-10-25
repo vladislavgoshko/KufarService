@@ -1,0 +1,40 @@
+Category tree
+https://api.kufar.by/category-tree/v1/category_tree
+
+
+Parameters
+https://api.kufar.by/taxonomy-proxy/v1/dispatch?routing=web_generalist&application=ad_listing&platform=web&taxonomy-version=1&parent=16000
+parent - parent category id
+There are parameters for all subcategories and links (subcategory id:[parameters id..])
+There are all parameters with values, parameters order and list of parameters in each category
+New parameters are possible in subsubcategories, it can be scrapped from kufar/l/{subcategorie}, for example: https://www.kufar.by/l/kompyuternaya-tehnika
+subsubcategories, where is_type : true
+
+Regions
+https://cre-api-v2.kufar.by/yandex-geocoder/static/regions
+
+
+Main request
+https://api.kufar.by/search-api/v2/search/rendered-paginated?cur=BYN&size=200&sort=lst.d
+
+cat - category id
+rgn - region id (1-7, all)
+ar - area id
+prc - price (r:100,10000)
+cur - currency (BYN, USD, EUR)
+query - query string
+
+cnd - condition ( , 1 = used, 2 = new)
+dle - kufar delivery ( , 1 = yes)
+sde - kufar pay ( , 1 = yes)
+oph - only with photo ( , 1 = yes)
+pse - enabled exchange ( , 1 = yes)
+
+size - count of ads
+sort - sorting (lst.d, lst.a)
+ot - ?
+
+cursor - pagination with token
+
+Max count ads = 200
+

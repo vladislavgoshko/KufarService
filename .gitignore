@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Project-specific
+*.db
+*.db-shm
+*.db-wal
+.pc-bridge-backups/
+.pc-bridge-memory/

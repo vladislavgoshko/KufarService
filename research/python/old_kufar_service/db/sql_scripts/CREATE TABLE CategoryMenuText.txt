@@ -1,0 +1,11 @@
+CREATE DATABASE KUFAR;
+
+USE KUFAR;
+
+CREATE TABLE IF NOT EXISTS CategoryMenuText (
+    CategoryID INT NOT NULL,
+    `Row` INT NOT NULL,
+    `Column` INT NOT NULL,
+    TextRu VARCHAR(255),
+    PRIMARY KEY (CategoryID)
+);

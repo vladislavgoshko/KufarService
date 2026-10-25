@@ -1,0 +1,4 @@
+{
+    "api_url_category_tree": "https://api.kufar.by/category-tree/v1/category_tree",
+    "file_path_category_tree": "api_data/category_tree.json"
+}
