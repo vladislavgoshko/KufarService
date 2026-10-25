@@ -51,6 +51,10 @@ public static class SearchMatchingExtensions
             case SavedFilterKind.KeywordsExclude:
                 return !filter.Values.Any(k => ContainsIgnoreCase(ad.SearchableText, k));
 
+            case SavedFilterKind.Query:
+                return filter.Values.Any() &&
+                       filter.Values.All(k => ContainsIgnoreCase(ad.SearchableText, k));
+
             case SavedFilterKind.SellerType:
                 if (string.Equals(filter.Values.FirstOrDefault(), "company", StringComparison.OrdinalIgnoreCase))
                 {

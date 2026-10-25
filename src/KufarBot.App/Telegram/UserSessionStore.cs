@@ -40,6 +40,9 @@ public class UserSearchDraft
 
     /// <summary>When set, the wizard edits an existing subscription (its filters) instead of creating a new one.</summary>
     public int? EditingSearchId { get; set; }
+
+    /// <summary>Current page of the subscriptions list (8 per page).</summary>
+    public int SubscriptionsPage { get; set; }
 }
 
 public class FilterWizardState

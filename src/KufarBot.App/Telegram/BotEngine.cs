@@ -22,6 +22,9 @@ namespace KufarBot.App.Telegram;
 
 public class BotEngine : BackgroundService
 {
+    /// <summary>Maximum number of simultaneously active (non-paused) subscriptions per user.</summary>
+    private const int MaxActiveSubscriptions = 10;
+
     private readonly IServiceProvider _serviceProvider;
     private readonly ITelegramBotClient _botClient;
     private readonly UserSessionStore _sessionStore;
@@ -155,6 +158,19 @@ public class BotEngine : BackgroundService
                 text: "👋 <b>Добро пожаловать в Kufar Мониторинг!</b>\n\n" +
                       "Этот бот отслеживает новые объявления на Kufar.by по вашим критериям и мгновенно присылает уведомления.\n\n" +
                       "Выберите действие в меню ниже:",
+                parseMode: ParseMode.Html,
+                replyMarkup: BotKeyboards.MainMenu(),
+                cancellationToken: ct
+            );
+            return;
+        }
+
+        if (text.Equals("/help", StringComparison.OrdinalIgnoreCase) ||
+            text.Equals("/about", StringComparison.OrdinalIgnoreCase))
+        {
+            await botClient.SendMessage(
+                chatId: chatId,
+                text: BotKeyboards.HelpText,
                 parseMode: ParseMode.Html,
                 replyMarkup: BotKeyboards.MainMenu(),
                 cancellationToken: ct
@@ -434,15 +450,23 @@ public class BotEngine : BackgroundService
             return;
         }
 
-        if (data is "fown_kw_inc" or "fown_kw_exc")
+        if (data is "fown_kw_inc" or "fown_kw_exc" or "fown_query")
         {
             var draft = _sessionStore.GetOrCreateDraft(userId);
-            draft.AwaitingFilterInput = data == "fown_kw_inc" ? -10 : -11;
+            draft.AwaitingFilterInput = data switch
+            {
+                "fown_kw_inc" => -10,
+                "fown_kw_exc" => -11,
+                _ => -12
+            };
             draft.AwaitingPriceInput = PriceInputMode.None;
 
-            string hint = data == "fown_kw_inc"
-                ? "🔔 Отправьте ключевые слова, <b>одно из которых</b> должно быть в названии/описании (через запятую):\n\n<i>Например: <code>gtx, 1060</code></i>"
-                : "🚫 Отправьте ключевые слова, которых <b>не должно быть</b> в объявлении (через запятую):\n\n<i>Например: <code>битая, обмен</code></i>";
+            string hint = data switch
+            {
+                "fown_kw_inc" => "🔔 Отправьте ключевые слова, <b>одно из которых</b> должно быть в названии/описании (через запятую):\n\n<i>Например: <code>gtx, 1060</code></i>",
+                "fown_kw_exc" => "🚫 Отправьте ключевые слова, которых <b>не должно быть</b> в объявлении (через запятую):\n\n<i>Например: <code>битая, обмен</code></i>",
+                _ => "🔎 Отправьте текст поиска (по словам). Все слова должны быть в названии/описании:\n\n<i>Например: <code>iphone 13 128</code></i>"
+            };
 
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 hint + "\n\n⬇️ Введите одним сообщением (пусто = удалить фильтр):",
@@ -687,6 +711,19 @@ public class BotEngine : BackgroundService
                 return;
             }
 
+            if (draft.EditingSearchId == null)
+            {
+                var existingSearches = await subscriptionService.GetUserSearchesAsync(userId, ct);
+                if (existingSearches.Count(s => !s.IsPaused) >= MaxActiveSubscriptions)
+                {
+                    await EditOrSendMessageAsync(botClient, chatId, messageId,
+                        $"🚧 <b>Достигнут лимит активных подписок ({MaxActiveSubscriptions}).</b>\n\n" +
+                        "Приостановите или удалите существующие подписки в разделе «Мои подписки», чтобы создать новую.",
+                        BotKeyboards.SearchDraftMenu(draft), ct);
+                    return;
+                }
+            }
+
             var savedSearch = await subscriptionService.SaveSearchAsync(
                 userId: userId,
                 subcategoryId: draft.SubcategoryId.Value,
@@ -723,6 +760,7 @@ public class BotEngine : BackgroundService
             var searches = await subscriptionService.GetUserSearchesAsync(userId, ct);
             if (searches.Count == 0)
             {
+                _sessionStore.GetOrCreateDraft(userId).SubscriptionsPage = 0;
                 await EditOrSendMessageAsync(botClient, chatId, messageId,
                     "📋 <b>У вас пока нет сохраненных подписок.</b>\n\n" +
                     "Нажмите кнопку ниже, чтобы создать первое отслеживание!",
@@ -735,9 +773,31 @@ public class BotEngine : BackgroundService
             }
 
             await EditOrSendMessageAsync(botClient, chatId, messageId,
-                $"📋 <b>Ваши активные подписки ({searches.Count}):</b>\n\n" +
+                $"📋 <b>Ваши подписки ({searches.Count}):</b>\n\n" +
                 "Нажмите на подписку для управления (пауза / удаление):",
-                BotKeyboards.SubscriptionsListMenu(searches), ct);
+                BotKeyboards.SubscriptionsListMenu(searches, _sessionStore.GetOrCreateDraft(userId).SubscriptionsPage), ct);
+            return;
+        }
+
+        // Subscriptions list paging
+        if (data.StartsWith("slp_") && int.TryParse(data.Substring(4), out int subsPage))
+        {
+            var searches = await subscriptionService.GetUserSearchesAsync(userId, ct);
+            if (searches.Count == 0)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "📋 <b>У вас пока нет сохраненных подписок.</b>",
+                    BotKeyboards.MainMenu(), ct);
+                return;
+            }
+
+            var draft = _sessionStore.GetOrCreateDraft(userId);
+            draft.SubscriptionsPage = Math.Max(0, subsPage);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"📋 <b>Ваши подписки ({searches.Count}):</b>\n\n" +
+                "Нажмите на подписку для управления (пауза / удаление):",
+                BotKeyboards.SubscriptionsListMenu(searches, draft.SubscriptionsPage), ct);
             return;
         }
 
@@ -1101,6 +1161,44 @@ public class BotEngine : BackgroundService
     {
         int pending = draft.AwaitingFilterInput!.Value;
         draft.AwaitingFilterInput = null;
+
+        if (pending == -12)
+        {
+            var words = FilterWizardUI.ParseQueryInput(text);
+            draft.Filters.RemoveAll(f => f.Kind == SavedFilterKind.Query);
+
+            if (words.Count > 0)
+            {
+                draft.Filters.Add(new SavedFilter
+                {
+                    Kind = SavedFilterKind.Query,
+                    Key = "own_query",
+                    Title = "Текст поиска",
+                    Values = words
+                });
+                await botClient.SendMessage(chatId: chatId,
+                    $"✅ Текст поиска: <b>{FilterWizardUI.Escape(string.Join(" ", words))}</b>",
+                    parseMode: ParseMode.Html, cancellationToken: ct);
+            }
+            else
+            {
+                await botClient.SendMessage(chatId: chatId, "🧹 Текст поиска удалён.", cancellationToken: ct);
+            }
+
+            if (draft.EditingSearchId.HasValue)
+            {
+                await botClient.SendMessage(chatId: chatId,
+                    "🎛 <b>Свои фильтры</b>", parseMode: ParseMode.Html,
+                    replyMarkup: BotKeyboards.OwnFiltersMenu(draft), cancellationToken: ct);
+            }
+            else
+            {
+                await botClient.SendMessage(chatId: chatId,
+                    $"⚙️ <b>Настройка параметров поиска:</b>\n\n{FormatDraftSummary(draft)}",
+                    parseMode: ParseMode.Html, replyMarkup: BotKeyboards.SearchDraftMenu(draft), cancellationToken: ct);
+            }
+            return;
+        }
 
         if (pending == -10 || pending == -11)
         {

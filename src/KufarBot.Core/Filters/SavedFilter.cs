@@ -25,7 +25,9 @@ public enum SavedFilterKind
     /// <summary>Bot's own filter: private seller or company only ("private" | "company").</summary>
     SellerType,
     /// <summary>Bot's own filter: ad must be younger than N hours (Min holds the hours).</summary>
-    MaxAgeHours
+    MaxAgeHours,
+    /// <summary>Bot's own query filter: ALL words must appear in title/description.</summary>
+    Query
 }
 
 /// <summary>

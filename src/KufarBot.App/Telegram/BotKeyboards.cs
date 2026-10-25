@@ -10,6 +10,23 @@ namespace KufarBot.App.Telegram;
 
 public static class BotKeyboards
 {
+    public static string HelpText =>
+        "ℹ️ <b>Kufar Мониторинг — справка</b>\n\n" +
+        "<b>Команды:</b>\n" +
+        "/start — главное меню\n" +
+        "/help — эта справка\n\n" +
+        "<b>Как пользоваться:</b>\n" +
+        "1) Нажмите «Создать поиск», выберите категорию, подкатегорию и город.\n" +
+        "2) Задайте диапазон цен (больше/меньше) и при желании фильтры («Фильтры»).\n" +
+        "3) Сохраните подписку — бот мгновенно пришлёт новые объявления с фото.\n\n" +
+        "<b>О фильтрах:</b>\n" +
+        "• Текст поиска — все слова должны быть в объявлении\n" +
+        "• Ключевые слова включить/исключить — совпадение по любому из слов\n" +
+        "• Продавец: только частники / только компании\n" +
+        "• Только свежие: не старше 1 ч … 3 дней\n" +
+        "• Фильтры сайта подкатегории: состояние, характеристики и т.д.\n\n" +
+        "<b>Мои подписки</b>: просмотр, пауза, удаление, изменение фильтров.";
+
     public static InlineKeyboardMarkup MainMenu()
     {
         return new InlineKeyboardMarkup(new[]
@@ -114,15 +131,38 @@ public static class BotKeyboards
         return new InlineKeyboardMarkup(rows);
     }
 
-    public static InlineKeyboardMarkup SubscriptionsListMenu(IReadOnlyList<UserSearchEntity> searches)
-    {
-        var rows = new List<InlineKeyboardButton[]>();
+    public const int SubscriptionsPageSize = 8;
 
-        foreach (var s in searches)
+    public static InlineKeyboardMarkup SubscriptionsListMenu(IReadOnlyList<UserSearchEntity> searches, int page = 0)
+    {
+        int pageCount = Math.Max(1, (searches.Count + SubscriptionsPageSize - 1) / SubscriptionsPageSize);
+        page = Math.Clamp(page, 0, pageCount - 1);
+
+        var rows = new List<InlineKeyboardButton[]>();
+        int startIndex = page * SubscriptionsPageSize;
+        int count = Math.Min(SubscriptionsPageSize, searches.Count - startIndex);
+
+        for (int i = startIndex; i < startIndex + count; i++)
         {
+            var s = searches[i];
             string statusIcon = s.IsPaused ? "⏸️" : "▶️";
             string title = $"{statusIcon} {s.SubcategoryTitle} ({(s.CityName ?? "Вся Беларусь")})";
             rows.Add(new[] { InlineKeyboardButton.WithCallbackData(title, $"subview_{s.Id}") });
+        }
+
+        if (pageCount > 1)
+        {
+            var nav = new List<InlineKeyboardButton>();
+            if (page > 0)
+            {
+                nav.Add(InlineKeyboardButton.WithCallbackData("⬅️", $"slp_{page - 1}"));
+            }
+            nav.Add(InlineKeyboardButton.WithCallbackData($"{page + 1}/{pageCount}", "slpage"));
+            if (page < pageCount - 1)
+            {
+                nav.Add(InlineKeyboardButton.WithCallbackData("➡️", $"slp_{page + 1}"));
+            }
+            rows.Add(nav.ToArray());
         }
 
         rows.Add(new[]
@@ -297,9 +337,11 @@ public static class BotKeyboards
     {
         var kwInc = draft.Filters.FirstOrDefault(f => f.Kind == SavedFilterKind.KeywordsInclude);
         var kwExc = draft.Filters.FirstOrDefault(f => f.Kind == SavedFilterKind.KeywordsExclude);
+        var query = draft.Filters.FirstOrDefault(f => f.Kind == SavedFilterKind.Query);
         var seller = draft.Filters.FirstOrDefault(f => f.Kind == SavedFilterKind.SellerType);
         var age = draft.Filters.FirstOrDefault(f => f.Kind == SavedFilterKind.MaxAgeHours);
 
+        string queryTitle = query == null ? "🔎 Текст поиска" : $"✅ Текст поиска: {JoinShort(query.Values)}";
         string kwIncTitle = kwInc == null ? "🔢 Ключевые слова (включить)" : $"✅ Включить: {JoinShort(kwInc.Values)}";
         string kwExcTitle = kwExc == null ? "🚫 Ключевые слова (исключить)" : $"✅ Исключить: {JoinShort(kwExc.Values)}";
         string sellerTitle = seller == null ? "👤 Продавец: любой" : $"✅ Продавец: {FormatSeller(seller)}";
@@ -307,6 +349,7 @@ public static class BotKeyboards
 
         return new InlineKeyboardMarkup(new[]
         {
+            new[] { InlineKeyboardButton.WithCallbackData(queryTitle, "fown_query") },
             new[] { InlineKeyboardButton.WithCallbackData(kwIncTitle, "fown_kw_inc") },
             new[] { InlineKeyboardButton.WithCallbackData(kwExcTitle, "fown_kw_exc") },
             new[] { InlineKeyboardButton.WithCallbackData(sellerTitle, "fown_seller") },

@@ -183,6 +183,86 @@ public class FilterWizardTests
         Assert.Equal(24m, restored[1].Min);
     }
 
+    // ---------------- Query filter (Stage 4) ----------------
+
+    [Fact]
+    public void ParseQueryInput_SplitsWordsAndDeduplicates()
+    {
+        var words = FilterWizardUI.ParseQueryInput("iphone  13, 16 pro; iphone");
+        Assert.Equal(new[] { "iphone", "13", "16", "pro" }, words);
+        Assert.Empty(FilterWizardUI.ParseQueryInput("  "));
+        // single chars dropped
+        Assert.Empty(FilterWizardUI.ParseQueryInput("a b c"));
+    }
+
+    [Fact]
+    public void QueryFilter_MatchesOnlyWhenAllWordsPresent()
+    {
+        var search = new UserSearchEntity
+        {
+            Id = 1,
+            UserId = 1,
+            SubcategoryId = 16010,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow
+        };
+        search.FiltersJson = SavedFilter.Serialize(new[]
+        {
+            new SavedFilter { Kind = SavedFilterKind.Query, Key = "own_query", Title = "Текст поиска", Values = new[] { "iphone", "13" } }
+        });
+
+        var ad = new KufarBot.Core.Models.Advertisement
+        {
+            Id = 700,
+            Title = "iPhone 13 128GB",
+            Location = "Минск",
+            AdLink = "l",
+            ListTimeUtc = DateTime.UtcNow,
+            Parameters = new List<KufarBot.Core.Models.AdParameter>()
+        };
+
+        Assert.True(search.Matches(ad));
+
+        var other = new KufarBot.Core.Models.Advertisement
+        {
+            Id = 701,
+            Title = "iPhone 12 64GB",
+            Location = "Минск",
+            AdLink = "l2",
+            ListTimeUtc = DateTime.UtcNow,
+            Parameters = new List<KufarBot.Core.Models.AdParameter>()
+        };
+        Assert.False(search.Matches(other));
+    }
+
+    [Fact]
+    public void SubscriptionsListMenu_PaginatesTenSubscriptions()
+    {
+        var searches = Enumerable.Range(1, 10).Select(i => new UserSearchEntity
+        {
+            Id = i,
+            UserId = 1,
+            SubcategoryId = 16010,
+            SubcategoryTitle = $"Подкатегория {i}",
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow
+        }).ToList();
+
+        var page0 = BotKeyboards.SubscriptionsListMenu(searches, 0);
+        var page0Buttons = page0.InlineKeyboard.SelectMany(r => r).Select(b => b.Text).ToList();
+        Assert.Equal(1, page0Buttons.Count(t => t.Contains("Подкатегория 8")));
+        Assert.Equal(0, page0Buttons.Count(t => t.Contains("Подкатегория 9")));
+        Assert.Contains("1/2", page0Buttons);
+        Assert.Contains("➡️", page0Buttons);
+
+        var page1 = BotKeyboards.SubscriptionsListMenu(searches, 1);
+        var page1Buttons = page1.InlineKeyboard.SelectMany(r => r).Select(b => b.Text).ToList();
+        Assert.Contains(page1Buttons, t => t.Contains("Подкатегория 9"));
+        Assert.DoesNotContain(page1Buttons, t => t.Contains("Подкатегория 1)"));
+        Assert.Contains("2/2", page1Buttons);
+        Assert.Contains("⬅️", page1Buttons);
+    }
+
     // ---------------- Matching integration with own filters ----------------
 
     [Fact]

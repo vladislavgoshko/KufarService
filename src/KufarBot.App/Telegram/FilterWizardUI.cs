@@ -168,6 +168,18 @@ public static class FilterWizardUI
         return FilterParseResult.Ok(text);
     }
 
+    /// <summary>Whitespace-separated query words (1..5 words, each ≤ 40 chars). Empty input clears the filter.</summary>
+    public static List<string> ParseQueryInput(string input)
+    {
+        return (input ?? "")
+            .Split(new[] { ' ', '\t', '\n', ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(k => k.Length > 1)
+            .Select(k => k.Length > 40 ? k.Substring(0, 40) : k)
+            .Take(5)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private static bool TryParseNumber(string? text, out decimal? value)
     {
         value = null;
