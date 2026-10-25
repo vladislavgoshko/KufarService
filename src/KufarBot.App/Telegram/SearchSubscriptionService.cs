@@ -19,8 +19,10 @@ public interface ISearchSubscriptionService
         string? cityName,
         decimal? minPriceByn,
         decimal? maxPriceByn,
+        string? filtersJson = null,
         CancellationToken ct = default);
 
+    Task<bool> UpdateSearchFiltersAsync(int searchId, long userId, string filtersJson, CancellationToken ct = default);
     Task<IReadOnlyList<UserSearchEntity>> GetUserSearchesAsync(long userId, CancellationToken ct = default);
     Task<UserSearchEntity?> GetSearchByIdAsync(int searchId, long userId, CancellationToken ct = default);
     Task<bool> TogglePauseAsync(int searchId, long userId, bool isPaused, CancellationToken ct = default);
@@ -46,12 +48,15 @@ public class SearchSubscriptionService : ISearchSubscriptionService
         string? cityName,
         decimal? minPriceByn,
         decimal? maxPriceByn,
+        string? filtersJson = null,
         CancellationToken ct = default)
     {
         if (minPriceByn.HasValue && maxPriceByn.HasValue && minPriceByn.Value > maxPriceByn.Value)
         {
             throw new ArgumentException("Минимальная цена не может быть больше максимальной.");
         }
+
+        filtersJson ??= "[]";
 
         // 1. Check if identical active/paused search already exists for user to ensure idempotency
         var existing = await _dbContext.UserSearches
@@ -63,12 +68,25 @@ public class SearchSubscriptionService : ISearchSubscriptionService
 
         if (existing != null)
         {
+            bool modified = false;
             if (existing.IsPaused)
             {
                 existing.IsPaused = false;
+                modified = true;
+            }
+
+            if (!string.Equals(existing.FiltersJson ?? "[]", filtersJson, StringComparison.Ordinal))
+            {
+                existing.FiltersJson = filtersJson;
+                modified = true;
+            }
+
+            if (modified)
+            {
                 existing.UpdatedAtUtc = DateTime.UtcNow;
                 await _dbContext.SaveChangesAsync(ct);
             }
+
             await EnsurePollingFeedExistsAsync(subcategoryId, cityId, ct);
             return existing;
         }
@@ -84,6 +102,7 @@ public class SearchSubscriptionService : ISearchSubscriptionService
             CityName = cityName,
             MinPriceByn = minPriceByn,
             MaxPriceByn = maxPriceByn,
+            FiltersJson = filtersJson,
             IsPaused = false,
             CreatedAtUtc = now,
             UpdatedAtUtc = now
@@ -98,6 +117,21 @@ public class SearchSubscriptionService : ISearchSubscriptionService
         _logger.LogInformation("[SearchSubscriptionService] Created search Id={SearchId} for User={UserId}", search.Id, userId);
 
         return search;
+    }
+
+    public async Task<bool> UpdateSearchFiltersAsync(int searchId, long userId, string filtersJson, CancellationToken ct = default)
+    {
+        var search = await GetSearchByIdAsync(searchId, userId, ct);
+        if (search == null)
+        {
+            return false;
+        }
+
+        search.FiltersJson = string.IsNullOrWhiteSpace(filtersJson) ? "[]" : filtersJson;
+        search.UpdatedAtUtc = DateTime.UtcNow;
+        await _dbContext.SaveChangesAsync(ct);
+        _logger.LogInformation("[SearchSubscriptionService] Updated filters for search Id={SearchId}, User={UserId}", searchId, userId);
+        return true;
     }
 
     private async Task EnsurePollingFeedExistsAsync(int subcategoryId, int? cityId, CancellationToken ct)

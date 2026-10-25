@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using KufarBot.Core.Filters;
 
 namespace KufarBot.App.Telegram;
 
@@ -20,6 +22,31 @@ public class UserSearchDraft
     public decimal? MinPriceByn { get; set; }
     public decimal? MaxPriceByn { get; set; }
     public PriceInputMode AwaitingPriceInput { get; set; } = PriceInputMode.None;
+
+    /// <summary>Chosen filters (server-side + bot's own), persisted with the search.</summary>
+    public List<SavedFilter> Filters { get; set; } = new();
+
+    /// <summary>Filter specs fetched from Kufar for the chosen subcategory (cached in draft).</summary>
+    public List<FilterSpec> AvailableSpecs { get; set; } = new();
+
+    /// <summary>Non-null while the filter wizard is open.</summary>
+    public FilterWizardState? Wizard { get; set; }
+
+    /// <summary>
+    /// null = normal value input for spec (index) of kind Range/Text;
+    /// -10/-11 = keyword include/exclude input.
+    /// </summary>
+    public int? AwaitingFilterInput { get; set; }
+
+    /// <summary>When set, the wizard edits an existing subscription (its filters) instead of creating a new one.</summary>
+    public int? EditingSearchId { get; set; }
+}
+
+public class FilterWizardState
+{
+    public int Page { get; set; }
+    public int SpecIndex { get; set; } = -1;
+    public int SelectedValuesPage { get; set; }
 }
 
 public class UserSessionStore
@@ -52,6 +79,12 @@ public class UserSessionStore
     public void ResetDraft(long userId)
     {
         _drafts.TryRemove(userId, out _);
+    }
+
+    /// <summary>Replaces the existing draft (used when editing an existing subscription's filters).</summary>
+    public void SetDraft(long userId, UserSearchDraft draft)
+    {
+        _drafts[userId] = (draft, DateTime.UtcNow);
     }
 
     private void PruneStaleSessions()
