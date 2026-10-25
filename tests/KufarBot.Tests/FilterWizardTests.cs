@@ -183,7 +183,129 @@ public class FilterWizardTests
         Assert.Equal(24m, restored[1].Min);
     }
 
-    // ---------------- Query filter (Stage 4) ----------------
+    // ---------------- Wizard state-machine per spec kind ----------------
+
+    private static UserSearchDraft DraftWithSpecs(params FilterSpec[] specs)
+    {
+        return new UserSearchDraft
+        {
+            SubcategoryId = 16010,
+            Wizard = new FilterWizardState(),
+            AvailableSpecs = specs.ToList()
+        };
+    }
+
+    [Fact]
+    public void FiltersMenu_MarksChosenSpecsAndKeepsPaging()
+    {
+        var draft = DraftWithSpecs(
+            new FilterSpec { Key = "condition", Title = "Состояние", Kind = FilterKind.Single, Options = new[] { new FilterOption("1", "Новое") } },
+            new FilterSpec { Key = "mileage", Title = "Пробег", Kind = FilterKind.Range, RangeLower = 0, RangeUpper = 500000 });
+
+        var empty = BotKeyboards.FiltersMenu(draft);
+        Assert.Contains(empty.InlineKeyboard.SelectMany(r => r), b => b.Text.StartsWith("▫️ Состояние"));
+
+        draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.Single, Key = "condition", Title = "Состояние", Values = new[] { "1" } });
+        var chosen = BotKeyboards.FiltersMenu(draft);
+        Assert.Contains(chosen.InlineKeyboard.SelectMany(r => r), b => b.Text.StartsWith("✅ Состояние"));
+        Assert.Contains(chosen.InlineKeyboard.SelectMany(r => r), b => b.Text.StartsWith("▫️ Пробег"));
+    }
+
+    [Fact]
+    public void FilterOptionsMenu_Bool_TogglesThroughOptions()
+    {
+        var draft = DraftWithSpecs(new FilterSpec { Key = "is_new", Title = "Новое", Kind = FilterKind.Bool, Options = new[] { new FilterOption("1", "Новое") } });
+
+        var none = BotKeyboards.FilterOptionsMenu(draft, 0);
+        Assert.Contains(none.InlineKeyboard.SelectMany(r => r), b => b.CallbackData == "fsv_0_0");
+        Assert.DoesNotContain(none.InlineKeyboard.SelectMany(r => r), b => b.CallbackData == "fclr_0");
+
+        draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.Bool, Key = "is_new", Title = "Новое", Values = new[] { "1" } });
+        var chosen = BotKeyboards.FilterOptionsMenu(draft, 0);
+        Assert.Contains(chosen.InlineKeyboard.SelectMany(r => r), b => b.CallbackData == "fclr_0");
+    }
+
+    [Fact]
+    public void FilterOptionsMenu_Multi_SecondPageHasConfirmAndClear()
+    {
+        var options = Enumerable.Range(1, 8).Select(i => new FilterOption(i.ToString(), $"Вариант {i}")).ToArray();
+        var draft = DraftWithSpecs(new FilterSpec { Key = "remuneration", Title = "Тип", Kind = FilterKind.Multi, Options = options });
+
+        // page 2
+        draft.Wizard!.SelectedValuesPage = 1;
+        var menu = BotKeyboards.FilterOptionsMenu(draft, 0);
+        var buttons = menu.InlineKeyboard.SelectMany(r => r).ToList();
+
+        Assert.Contains(buttons, b => b.CallbackData == "fmv_0_6");
+        Assert.Contains(buttons, b => b.CallbackData == "fmv_0_7");
+        Assert.DoesNotContain(buttons, b => b.CallbackData == "fmv_0_5");
+        Assert.Contains(buttons, b => b.CallbackData == "fmdone_0");
+        Assert.Contains(buttons, b => b.CallbackData == "fvp_0_0");
+    }
+
+    [Fact]
+    public void FilterOptionsMenu_Single_SelectsAndClears()
+    {
+        var draft = DraftWithSpecs(new FilterSpec
+        {
+            Key = "condition", Title = "Состояние", Kind = FilterKind.Single,
+            Options = new[] { new FilterOption("1", "Новое"), new FilterOption("2", "Б/у") }
+        });
+
+        draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.Single, Key = "condition", Title = "Состояние", Values = new[] { "2" } });
+        var menu = BotKeyboards.FilterOptionsMenu(draft, 0);
+        var buttons = menu.InlineKeyboard.SelectMany(r => r).ToList();
+
+        Assert.Contains(buttons, b => b.CallbackData == "fsv_0_0");
+        Assert.Contains(buttons, b => b.CallbackData == "fsv_0_1");
+        Assert.Contains(buttons, b => b.CallbackData == "fclr_0");
+    }
+
+    [Fact]
+    public void FilterOptionsMenu_RangeAndText_ShowClearWhenSet()
+    {
+        var draft = DraftWithSpecs(
+            new FilterSpec { Key = "mileage", Title = "Пробег", Kind = FilterKind.Range, RangeLower = 0, RangeUpper = 500000 },
+            new FilterSpec { Key = "seller_note", Title = "Примечание", Kind = FilterKind.Text });
+
+        var rangeEmpty = BotKeyboards.FilterOptionsMenu(draft, 0);
+        Assert.DoesNotContain(rangeEmpty.InlineKeyboard.SelectMany(r => r), b => (b.CallbackData ?? "").StartsWith("fclr_"));
+
+        draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.Range, Key = "mileage", Title = "Пробег", Min = 1000m, Max = 50000m });
+        draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.Text, Key = "seller_note", Title = "Примечание", Values = new[] { "Гарант" } });
+
+        var rangeSet = BotKeyboards.FilterOptionsMenu(draft, 0);
+        Assert.Contains(rangeSet.InlineKeyboard.SelectMany(r => r), b => b.CallbackData == "fclr_0");
+
+        var textSet = BotKeyboards.FilterOptionsMenu(draft, 1);
+        Assert.Contains(textSet.InlineKeyboard.SelectMany(r => r), b => b.CallbackData == "fclr_1");
+    }
+
+    [Fact]
+    public void RenderSpecScreen_RangeShowsBoundsAndCurrent()
+    {
+        var draft = DraftWithSpecs(new FilterSpec { Key = "mileage", Title = "Пробег", Kind = FilterKind.Range, RangeLower = 0, RangeUpper = 500000 });
+        draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.Range, Key = "mileage", Title = "Пробег", Min = 1000m, Max = 50000m });
+
+        string screen = FilterWizardUI.RenderSpecScreen(draft, 0);
+        Assert.Contains("1000–50000", screen);
+        Assert.Contains("0 – 500000", screen);
+    }
+
+    [Fact]
+    public void OwnFilterValueText_FormatsAllKinds()
+    {
+        var query = new SavedFilter { Kind = SavedFilterKind.Query, Key = "own_query", Title = "Текст поиска", Values = new[] { "iphone", "13" } };
+        var seller = new SavedFilter { Kind = SavedFilterKind.SellerType, Key = "own_seller", Title = "Продавец", Values = new[] { "company" } };
+        var age = new SavedFilter { Kind = SavedFilterKind.MaxAgeHours, Key = "own_age", Title = "Возраст", Min = 72m };
+        var range = new SavedFilter { Kind = SavedFilterKind.Range, Key = "mileage", Title = "Пробег", Min = 1000m, Max = 50000m };
+
+        Assert.Equal("iphone, 13", BotKeyboards.FilterValueText(query));
+        Assert.Equal("только компании", BotKeyboards.FilterValueText(seller));
+        Assert.Equal("за 3 дн.", BotKeyboards.FilterValueText(age));
+        Assert.Equal("1000–50000", BotKeyboards.FilterValueText(range));
+    }
+
 
     [Fact]
     public void ParseQueryInput_SplitsWordsAndDeduplicates()

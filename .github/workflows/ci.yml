@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore KufarService.sln
+
+      - name: Build
+        run: dotnet build KufarService.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/KufarBot.Tests/KufarBot.Tests.csproj --configuration Release --no-build --logger "console;verbosity=normal"
