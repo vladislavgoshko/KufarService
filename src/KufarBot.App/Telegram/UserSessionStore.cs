@@ -24,21 +24,50 @@ public class UserSearchDraft
 
 public class UserSessionStore
 {
-    private readonly ConcurrentDictionary<long, UserSearchDraft> _drafts = new();
+    private const int MaxTrackedSessions = 500;
+    private static readonly TimeSpan StaleAfter = TimeSpan.FromHours(6);
+
+    private readonly ConcurrentDictionary<long, (UserSearchDraft Draft, DateTime LastActivityUtc)> _drafts = new();
 
     public UserSearchDraft GetOrCreateDraft(long userId)
     {
-        return _drafts.GetOrAdd(userId, _ => new UserSearchDraft());
+        PruneStaleSessions();
+        return _drafts.AddOrUpdate(
+            userId,
+            _ => (new UserSearchDraft(), DateTime.UtcNow),
+            (_, existing) => (existing.Draft, DateTime.UtcNow)).Draft;
     }
 
     public UserSearchDraft? GetDraft(long userId)
     {
-        _drafts.TryGetValue(userId, out var draft);
-        return draft;
+        if (_drafts.TryGetValue(userId, out var existing))
+        {
+            _drafts[userId] = (existing.Draft, DateTime.UtcNow);
+            return existing.Draft;
+        }
+
+        return null;
     }
 
     public void ResetDraft(long userId)
     {
         _drafts.TryRemove(userId, out _);
+    }
+
+    private void PruneStaleSessions()
+    {
+        if (_drafts.Count < MaxTrackedSessions)
+        {
+            return;
+        }
+
+        var cutoff = DateTime.UtcNow - StaleAfter;
+        foreach (var kv in _drafts)
+        {
+            if (kv.Value.LastActivityUtc < cutoff)
+            {
+                _drafts.TryRemove(kv.Key, out _);
+            }
+        }
     }
 }

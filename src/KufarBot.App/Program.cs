@@ -51,6 +51,16 @@ public class Program
         builder.Services.AddSingleton<ICategoryService, CachedCategoryService>();
         builder.Services.AddScoped<ISearchSubscriptionService, SearchSubscriptionService>();
 
+        // Worker options from configuration (appsettings: sections "Polling" and "Outbox")
+        builder.Services.Configure<FeedPollingOptions>(
+            builder.Configuration.GetSection(FeedPollingOptions.SectionName));
+        builder.Services.Configure<OutboxDeliveryOptions>(
+            builder.Configuration.GetSection(OutboxDeliveryOptions.SectionName));
+        builder.Services.AddSingleton<FeedPollingOptions>(sp =>
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<FeedPollingOptions>>().Value);
+        builder.Services.AddSingleton<OutboxDeliveryOptions>(sp =>
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OutboxDeliveryOptions>>().Value);
+
         // Background Workers
         builder.Services.AddHostedService<FeedPollingWorker>();
         builder.Services.AddHostedService<OutboxDeliveryWorker>();
@@ -62,7 +72,7 @@ public class Program
         using (var scope = host.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.Database.EnsureCreated();
+            db.Database.Migrate();
         }
 
         await host.RunAsync();

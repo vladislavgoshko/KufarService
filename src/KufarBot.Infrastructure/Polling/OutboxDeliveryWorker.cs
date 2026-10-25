@@ -17,12 +17,16 @@ namespace KufarBot.Infrastructure.Polling;
 
 public class OutboxDeliveryOptions
 {
+    public const string SectionName = "Outbox";
+
     public int PollingIntervalSeconds { get; set; } = 2;
     public int BatchSize { get; set; } = 20;
     public int MaxAttempts { get; set; } = 5;
     public int LeaseDurationSeconds { get; set; } = 60;
     public double MessagesPerSecondPerUser { get; set; } = 1.0;
     public double MessagesPerSecondGlobal { get; set; } = 25.0;
+    public int RateLimitMaxEntries { get; set; } = 1000;
+    public int RateLimitEntryStaleHours { get; set; } = 1;
 }
 
 public class OutboxDeliveryWorker : BackgroundService
@@ -299,6 +303,20 @@ public class OutboxDeliveryWorker : BackgroundService
         lock (_rateLimitLock)
         {
             var now = DateTime.UtcNow;
+
+            // Bound memory usage: prune stale per-user entries when the dictionary grows too large.
+            if (_lastUserSendTimes.Count >= _options.RateLimitMaxEntries)
+            {
+                var staleCutoff = now - TimeSpan.FromHours(_options.RateLimitEntryStaleHours);
+                var staleKeys = _lastUserSendTimes
+                    .Where(kv => kv.Value < staleCutoff)
+                    .Select(kv => kv.Key)
+                    .ToList();
+                foreach (var key in staleKeys)
+                {
+                    _lastUserSendTimes.Remove(key);
+                }
+            }
 
             var globalMsPerMsg = 1000.0 / _options.MessagesPerSecondGlobal;
             var nextGlobalTime = _lastGlobalSendTime.AddMilliseconds(globalMsPerMsg);

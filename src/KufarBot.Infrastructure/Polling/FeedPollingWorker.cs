@@ -15,6 +15,8 @@ namespace KufarBot.Infrastructure.Polling;
 
 public class FeedPollingOptions
 {
+    public const string SectionName = "Polling";
+
     public int PollingIntervalSeconds { get; set; } = 45;
     public int RequestTimeoutSeconds { get; set; } = 30;
     public int MaxPagesPerPoll { get; set; } = 3;
@@ -217,11 +219,36 @@ public class FeedPollingWorker : BackgroundService
             .Distinct()
             .ToList();
 
+        // A search must be served by exactly *its* corresponding feed:
+        //   feed (subcat, city=X)  -> searches with a concrete CityId == X
+        //   feed (subcat, null)    -> searches with CityId == null ("All Belarus")
+        // Attaching city searches to the "all Belarus" feed would notify users about
+        // ads from other cities (the client-side price matching cannot tell them apart).
         var activeSearches = await dbContext.UserSearches
             .Where(s => !s.IsPaused &&
                         s.SubcategoryId == feed.SubcategoryId &&
-                        (feed.CityId == null || s.CityId == feed.CityId))
+                        ((feed.CityId == null && s.CityId == null) ||
+                         (feed.CityId != null && s.CityId == feed.CityId)))
             .ToListAsync(ct);
+
+        // Bulk-load already-delivered (UserId, AdId) pairs to avoid per-pair AnyAsync queries (N+1).
+        var newAdIds = newAds.Select(a => a.Id).ToList();
+        var candidateUserIds = activeSearches
+            .Select(s => s.UserId)
+            .Distinct()
+            .ToList();
+        var deliveredKeySet = new HashSet<(long UserId, long AdId)>();
+        if (newAdIds.Count > 0 && candidateUserIds.Count > 0)
+        {
+            var deliveredPairs = await dbContext.DeliveredAds
+                .AsNoTracking()
+                .Where(d => newAdIds.Contains(d.AdId) && candidateUserIds.Contains(d.UserId))
+                .Select(d => new { d.UserId, d.AdId })
+                .ToListAsync(ct);
+            deliveredKeySet = deliveredPairs
+                .Select(p => (p.UserId, p.AdId))
+                .ToHashSet();
+        }
 
         await using var transaction = await dbContext.Database.BeginTransactionAsync(ct);
         try
@@ -238,21 +265,15 @@ public class FeedPollingWorker : BackgroundService
                         continue;
                     }
 
-                    if (notifiedUserIdsThisAd.Contains(search.UserId))
+                    if (!notifiedUserIdsThisAd.Add(search.UserId))
                     {
                         continue;
                     }
 
-                    bool alreadyDelivered = await dbContext.DeliveredAds
-                        .AnyAsync(d => d.UserId == search.UserId && d.AdId == ad.Id, ct);
-
-                    if (alreadyDelivered)
+                    if (deliveredKeySet.Contains((search.UserId, ad.Id)))
                     {
-                        notifiedUserIdsThisAd.Add(search.UserId);
                         continue;
                     }
-
-                    notifiedUserIdsThisAd.Add(search.UserId);
 
                     dbContext.DeliveredAds.Add(new DeliveredAdEntity
                     {
