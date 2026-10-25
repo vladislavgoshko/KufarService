@@ -11,6 +11,12 @@ namespace KufarBot.Infrastructure.TelegramClient; // Changed to avoid namespace 
 public interface ITelegramSender
 {
     Task SendTextMessageAsync(long chatId, string htmlMessage, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sends a photo with an HTML caption. Throws the original exception when Telegram
+    /// cannot deliver the photo (e.g. bad URL) — the caller must decide on fallback.
+    /// </summary>
+    Task SendPhotoAsync(long chatId, string photoUrl, string htmlCaption, CancellationToken ct = default);
 }
 
 public class TelegramBotClientSender : ITelegramSender
@@ -27,6 +33,19 @@ public class TelegramBotClientSender : ITelegramSender
         await _botClient.SendMessage(
             chatId: chatId,
             text: htmlMessage,
+            parseMode: ParseMode.Html,
+            cancellationToken: ct
+        );
+    }
+
+    public async Task SendPhotoAsync(long chatId, string photoUrl, string htmlCaption, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(photoUrl);
+
+        await _botClient.SendPhoto(
+            chatId: chatId,
+            photo: new InputFileUrl(photoUrl),
+            caption: htmlCaption,
             parseMode: ParseMode.Html,
             cancellationToken: ct
         );

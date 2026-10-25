@@ -158,10 +158,11 @@ public class OutboxDeliveryWorker : BackgroundService
         NotificationOutboxEntity item, 
         CancellationToken ct)
     {
+        OutboxPayload? payload = null;
         string messageText = string.Empty;
         try
         {
-            var payload = JsonSerializer.Deserialize<OutboxPayload>(item.PayloadJson);
+            payload = JsonSerializer.Deserialize<OutboxPayload>(item.PayloadJson);
             if (payload == null) throw new InvalidOperationException("Payload deserialized to null.");
 
             messageText = FormatHtmlMessage(payload);
@@ -179,7 +180,7 @@ public class OutboxDeliveryWorker : BackgroundService
         {
             await ApplyRateLimitsAsync(item.UserId, ct);
 
-            await telegramSender.SendTextMessageAsync(item.UserId, messageText, ct);
+            await SendAdMessageAsync(telegramSender, item.UserId, payload, messageText, ct);
 
             item.Status = 2; // Sent
             item.SentAtUtc = DateTime.UtcNow;
@@ -237,6 +238,43 @@ public class OutboxDeliveryWorker : BackgroundService
             {
                 _logger.LogError(ex, "[OutboxDeliveryWorker] Failed to save status update for OutboxId={OutboxId}", item.Id);
             }
+        }
+    }
+
+    private async Task SendAdMessageAsync(
+        ITelegramSender telegramSender,
+        long userId,
+        OutboxPayload payload,
+        string htmlMessage,
+        CancellationToken ct)
+    {
+        var photoUrl = payload.ImageUrl;
+
+        if (string.IsNullOrWhiteSpace(photoUrl))
+        {
+            await telegramSender.SendTextMessageAsync(userId, htmlMessage, ct);
+            return;
+        }
+
+        try
+        {
+            await telegramSender.SendPhotoAsync(userId, photoUrl, htmlMessage, ct);
+        }
+        catch (ApiRequestException photoEx)
+        {
+            _logger.LogWarning(
+                photoEx,
+                "[OutboxDeliveryWorker] Photo send failed (code {Code}) for UserId={UserId}, falling back to text.",
+                photoEx.ErrorCode, userId);
+            await telegramSender.SendTextMessageAsync(userId, htmlMessage, ct);
+        }
+        catch (HttpRequestException photoEx)
+        {
+            _logger.LogWarning(
+                photoEx,
+                "[OutboxDeliveryWorker] Photo network error for UserId={UserId}, falling back to text.",
+                userId);
+            await telegramSender.SendTextMessageAsync(userId, htmlMessage, ct);
         }
     }
 
