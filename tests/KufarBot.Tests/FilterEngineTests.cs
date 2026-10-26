@@ -105,9 +105,10 @@ public class FilterEngineTests
         var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchJson);
         var specs = FilterSpecFactory.FromDispatch(dispatch);
 
-        Assert.Equal(3, specs.Count); // area and only_with_photo skipped, condition deduplicated (first variation wins)
+        Assert.Equal(2, specs.Count); // area/only_with_photo/users_synonyms skipped, condition deduplicated (first variation wins)
         Assert.All(specs, s => Assert.NotEqual("area", s.Key));
         Assert.All(specs, s => Assert.NotEqual("only_with_photo", s.Key));
+        Assert.All(specs, s => Assert.NotEqual("users_synonyms", s.Key));
 
         var condition = specs.Single(s => s.Key == "condition");
         Assert.Equal(FilterKind.Single, condition.Kind);
@@ -122,10 +123,58 @@ public class FilterEngineTests
         Assert.Equal(FilterKind.Range, ram.Kind);
         Assert.Equal(4m, ram.RangeLower);
         Assert.Equal(64m, ram.RangeUpper);
-
-        var synonyms = specs.Single(s => s.Key == "users_synonyms");
-        Assert.Equal(FilterKind.Text, synonyms.Kind);
     }
+
+    [Fact]
+    public void FilterSpecFactory_ByCategoryBuildsMapForSubcategoryRules()
+    {
+        var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchRulesJson);
+        var map = FilterSpecFactory.FromDispatchByCategory(dispatch);
+
+        // subcategory rule detected; region-bound rule is not a subcategory
+        Assert.Single(map);
+        Assert.True(map.ContainsKey(16010));
+
+        var specs = map[16010];
+        Assert.Equal(2, specs.Count); // base condition + subcategory's Тип, ordered as on the site
+        Assert.Equal("computers_component_type", specs[0].Key);
+        Assert.Equal("condition", specs[1].Key);
+    }
+
+    [Fact]
+    public void FilterSpecFactory_ByCategoryWithoutRulesReturnsEmptyMap()
+    {
+        var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchJson);
+        var map = FilterSpecFactory.FromDispatchByCategory(dispatch);
+
+        Assert.Empty(map);
+    }
+
+    [Fact]
+    public void FilterSpecFactory_KeepsOnlyWhitelistedBoolFilters()
+    {
+        var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchBoolRulesJson);
+        var specs = FilterSpecFactory.FromDispatchForSubcategory(dispatch, 16011);
+
+        // possible_exchange is a real ad attribute; gift_new (posting-form bool) is dropped
+        Assert.Equal(2, specs.Count);
+        Assert.Contains(specs, s => s.Key == "possible_exchange" && s.Kind == FilterKind.Bool);
+        Assert.Contains(specs, s => s.Key == "condition");
+        Assert.DoesNotContain(specs, s => s.Key == "gift_new");
+    }
+
+    private const string DispatchBoolRulesJson = @"{""metadata"":{""parameters"":{
+        ""refs"":{
+            ""200"":{""variation_id"":200,""name"":""possible_exchange"",""url_name"":""pe"",""type"":""bool"",""meta"":""set"",
+                ""labels"":{""name"":{""ru"":""Обмен""}}},
+            ""201"":{""variation_id"":201,""name"":""gift_new"",""url_name"":""gn"",""type"":""bool"",""meta"":""set"",
+                ""labels"":{""name"":{""ru"":""Подарок""}}},
+            ""202"":{""variation_id"":202,""name"":""condition"",""url_name"":""cnd"",""type"":""int"",""meta"":""set"",
+                ""labels"":{""name"":{""ru"":""Состояние""}},
+                ""values"":[{""value"":1,""labels"":{""ru"":""Новое""}}]}
+        },
+        ""rules"":[{""rule"":{""category"":""16011""},""refs"":[""200"",""201"",""202""]}]
+    }}}";
 
     private static UserSearchEntity MakeSearch(params SavedFilter[] filters)
     {

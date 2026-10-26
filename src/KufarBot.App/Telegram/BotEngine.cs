@@ -308,6 +308,18 @@ public class BotEngine : BackgroundService
             }
 
             await EnsureFilterSpecsLoadedAsync(botClient, chatId, messageId, draft, ct);
+            if (draft.AvailableSpecs.Count == 0)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Не удалось загрузить параметры подкатегории с Kufar.\n\nПопробуйте ещё раз:",
+                    new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("🔄 Повторить", "fmenu") },
+                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ К черновику", "menu_draft") }
+                    }), ct);
+                return;
+            }
+
             if (draft.Wizard == null)
             {
                 draft.Wizard = new FilterWizardState();
@@ -409,6 +421,25 @@ public class BotEngine : BackgroundService
             draft.Wizard!.SpecIndex = -1;
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 RenderFiltersMenuText(draft), BotKeyboards.FiltersMenu(draft), ct);
+            return;
+        }
+
+        // Clear all site-parameter filters at once
+        if (data == "fclrall")
+        {
+            var draft = _sessionStore.GetOrCreateDraft(userId);
+            draft.Filters.RemoveAll(f => f.Kind is
+                SavedFilterKind.Bool or SavedFilterKind.Single or SavedFilterKind.Multi
+                or SavedFilterKind.Range or SavedFilterKind.Text);
+            if (draft.Wizard != null)
+            {
+                draft.Wizard.SpecIndex = -1;
+                draft.Wizard.SelectedValuesPage = 0;
+            }
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                "🧹 Все фильтры сайта сброшены.\n\n" + RenderFiltersMenuText(draft),
+                BotKeyboards.FiltersMenu(draft), ct);
             return;
         }
 
@@ -608,6 +639,8 @@ public class BotEngine : BackgroundService
         {
             var (category, subcategory) = await categoryService.FindSubcategoryAsync(subId, ct);
             var draft = _sessionStore.GetOrCreateDraft(userId);
+
+            bool subcategoryChanged = draft.SubcategoryId != subId;
             draft.SubcategoryId = subId;
             draft.SubcategoryTitle = subcategory?.Name ?? $"Подкатегория {subId}";
             if (category != null)
@@ -615,6 +648,15 @@ public class BotEngine : BackgroundService
                 draft.CategoryId = category.Id;
                 draft.CategoryTitle = category.Name;
             }
+
+            if (subcategoryChanged)
+            {
+                // site-parameter filters belong to the previous subcategory — drop them,
+                // keeping the bot's own filters (keywords, seller, age, query)
+                ResetServerFiltersOnSubcategoryChange(draft);
+            }
+            // warm up the dispatch cache so «Фильтры» opens instantly
+            PrefetchFilterSpecs(draft);
 
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 $"✅ Подкатегория выбрана: <b>{draft.SubcategoryTitle}</b>\n\n{FormatDraftSummary(draft)}",
@@ -951,17 +993,68 @@ public class BotEngine : BackgroundService
 
         try
         {
-            using var scope = _serviceProvider.CreateScope();
-            var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
-            // CategoryId is guaranteed when a subcategory was chosen; derive 16010 -> 16000 as a fallback
-            int parentCategoryId = draft.CategoryId ?? (draft.SubcategoryId.Value / 100 * 100);
-            draft.AvailableSpecs = (await kufarClient.GetFiltersForSubcategoryAsync(
-                draft.SubcategoryId.Value, parentCategoryId, ct)).ToList();
+            draft.AvailableSpecs = await LoadSubcategorySpecsAsync(draft, ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[BotEngine] Failed to load filter specs for subcategory {SubId}", draft.SubcategoryId);
         }
+    }
+
+    /// <summary>Loads filter specs for the draft's subcategory (served from the client's category cache when warm).</summary>
+    private async Task<List<FilterSpec>> LoadSubcategorySpecsAsync(UserSearchDraft draft, CancellationToken ct)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
+        // CategoryId is guaranteed when a subcategory was chosen; derive 16010 -> 16000 as a fallback
+        int parentCategoryId = draft.CategoryId ?? (draft.SubcategoryId!.Value / 100 * 100);
+        return (await kufarClient.GetFiltersForSubcategoryAsync(
+            draft.SubcategoryId!.Value, parentCategoryId, ct)).ToList();
+    }
+
+    /// <summary>
+    /// Fire-and-forget prefetch of the whole category dispatch (one request, cached in the client)
+    /// so the first open of «Фильтры» shows them instantly.
+    /// </summary>
+    private void PrefetchFilterSpecs(UserSearchDraft draft)
+    {
+        if (draft.CategoryId == null)
+        {
+            return;
+        }
+
+        int parentCategoryId = draft.CategoryId.Value;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
+                await kufarClient.GetFiltersForCategoryAsync(parentCategoryId);
+                _logger.LogInformation("[BotEngine] Filter specs prefetched for parent category {ParentId}", parentCategoryId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[BotEngine] Prefetch of filter specs for parent {ParentId} failed", parentCategoryId);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Site-parameter filters belong to the previous subcategory — cleared on switch.
+    /// The bot's own filters (keywords, seller type, age, query) are subcategory-independent
+    /// and stay so the user doesn't enter them again.
+    /// </summary>
+    private static void ResetServerFiltersOnSubcategoryChange(UserSearchDraft draft)
+    {
+        draft.AvailableSpecs.Clear();
+        draft.Wizard = null;
+        draft.AwaitingFilterInput = null;
+
+        draft.Filters.RemoveAll(f => f.Kind is not
+            (SavedFilterKind.KeywordsInclude or SavedFilterKind.KeywordsExclude
+                or SavedFilterKind.SellerType or SavedFilterKind.MaxAgeHours or SavedFilterKind.Query));
     }
 
     private static bool IsSpecIndexValid(UserSearchDraft draft, int specIndex)

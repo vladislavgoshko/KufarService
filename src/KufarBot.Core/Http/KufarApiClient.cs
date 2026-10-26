@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -18,6 +19,14 @@ public class KufarApiClient : IKufarApiClient
     {
         PropertyNameCaseInsensitive = true
     };
+
+    /// <summary>Deserialized dispatch of one category + specs per subcategory (computed once).</summary>
+    private sealed record CategorySpecsEntry(
+        KufarParametersResponseDto? Dispatch,
+        IReadOnlyDictionary<int, IReadOnlyList<FilterSpec>> SpecsBySubcategory);
+
+    /// <summary>Process-wide cache: one HTTP request per category; the dispatch covers all its subcategories.</summary>
+    private readonly ConcurrentDictionary<int, Lazy<Task<CategorySpecsEntry>>> _categorySpecsCache = new();
 
     public KufarApiClient(HttpClient httpClient)
     {
@@ -91,6 +100,55 @@ public class KufarApiClient : IKufarApiClient
 
     public async Task<IReadOnlyList<FilterSpec>> GetFiltersForSubcategoryAsync(int subcategoryId, int parentCategoryId, CancellationToken ct = default)
     {
+        var entry = await GetCategorySpecsEntryAsync(parentCategoryId, ct);
+
+        if (entry.SpecsBySubcategory.TryGetValue(subcategoryId, out IReadOnlyList<FilterSpec>? specs))
+        {
+            return specs;
+        }
+
+        // the subcategory has no own rule in the dispatch — fall back to base scenario parameters
+        return FilterSpecFactory.FromDispatchForSubcategory(entry.Dispatch, subcategoryId);
+    }
+
+    public async Task<IReadOnlyDictionary<int, IReadOnlyList<FilterSpec>>> GetFiltersForCategoryAsync(int parentCategoryId, CancellationToken ct = default)
+    {
+        var entry = await GetCategorySpecsEntryAsync(parentCategoryId, ct);
+        return entry.SpecsBySubcategory;
+    }
+
+    private async Task<CategorySpecsEntry> GetCategorySpecsEntryAsync(int parentCategoryId, CancellationToken ct)
+    {
+        while (true)
+        {
+            var lazy = _categorySpecsCache.GetOrAdd(
+                parentCategoryId,
+                id => new Lazy<Task<CategorySpecsEntry>>(
+                    () => FetchCategorySpecsAsync(id, CancellationToken.None),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+
+            CategorySpecsEntry entry;
+            try
+            {
+                entry = await lazy.Value.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // a faulted fetch must not poison the cache — drop it so the next call retries
+                _categorySpecsCache.TryRemove(KeyValuePair.Create(parentCategoryId, lazy));
+                throw;
+            }
+
+            return entry;
+        }
+    }
+
+    private async Task<CategorySpecsEntry> FetchCategorySpecsAsync(int parentCategoryId, CancellationToken ct)
+    {
         string url =
             $"https://api.kufar.by/taxonomy-proxy/v1/dispatch?routing=web_generalist&application=ad_listing&platform=web&taxonomy-version=1&parent={parentCategoryId}";
 
@@ -100,6 +158,7 @@ public class KufarApiClient : IKufarApiClient
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         var dispatch = await JsonSerializer.DeserializeAsync<KufarParametersResponseDto>(stream, JsonOptions, ct);
 
-        return FilterSpecFactory.FromDispatchForSubcategory(dispatch, subcategoryId);
+        var specsBySubcategory = FilterSpecFactory.FromDispatchByCategory(dispatch);
+        return new CategorySpecsEntry(dispatch, specsBySubcategory);
     }
 }

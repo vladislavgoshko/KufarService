@@ -26,7 +26,12 @@ public static class FilterWizardUI
                 sb.Append("Выберите значение:\n");
                 break;
             case FilterKind.Multi:
-                sb.Append("Выберите подходящие значения (можно несколько), затем «Подтвердить выбор».\n");
+                var chosenMulti = BotKeyboards.FindForSpec(draft, spec);
+                if (chosenMulti != null && chosenMulti.Values.Count > 0)
+                {
+                    sb.Append($"Выбрано: <b>{chosenMulti.Values.Count}</b>\n\n");
+                }
+                sb.Append("Выберите подходящие значения (можно несколько), затем «✔ Готово».\n");
                 break;
             case FilterKind.Range:
                 var saved = BotKeyboards.FindForSpec(draft, spec);

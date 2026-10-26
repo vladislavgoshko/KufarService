@@ -237,7 +237,9 @@ public static class BotKeyboards
             rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"{icon} {spec.Title}", $"fs_{i}") });
         }
 
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🎛 Свои фильтры", "fown") });
+        rows.Add(HasServerFilters(draft.Filters)
+            ? new[] { InlineKeyboardButton.WithCallbackData("🧹 Очистить всё", "fclrall"), InlineKeyboardButton.WithCallbackData("🎛 Свои фильтры", "fown") }
+            : new[] { InlineKeyboardButton.WithCallbackData("🎛 Свои фильтры", "fown") });
 
         var nav = new List<InlineKeyboardButton>();
         if (pageCount > 1)
@@ -282,16 +284,33 @@ public static class BotKeyboards
                 int pageCount = spec.Options.Count == 0 ? 1 : (spec.Options.Count + SpecOptionsPageSize - 1) / SpecOptionsPageSize;
                 var chosen = draft.Filters.FirstOrDefault(f => f.Key == spec.Key);
 
+                string callbackPrefix = spec.Kind == FilterKind.Multi ? "fmv" : "fsv";
+                bool twoColumns = spec.Kind != FilterKind.Bool &&
+                                  spec.Options.All(o => o.Label.Length <= 14);
+
+                var pageButtons = new List<InlineKeyboardButton[]>();
                 for (int i = startIndex; i < startIndex + pageItems; i++)
                 {
                     var option = spec.Options[i];
                     bool selected = chosen != null && chosen.Values.Contains(option.Value, StringComparer.OrdinalIgnoreCase);
                     string icon = selected ? "🟩" : (chosen != null ? "⃞" : "");
                     string prefix = selected ? $"{icon} " : (chosen != null ? $"{icon} " : "");
-                    string data = spec.Kind == FilterKind.Multi
-                        ? $"fmv_{specIndex}_{i}"
-                        : $"fsv_{specIndex}_{i}";
-                    rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"{prefix}{option.Label}", data) });
+                    pageButtons.Add(new[] { InlineKeyboardButton.WithCallbackData($"{prefix}{option.Label}", $"{callbackPrefix}_{specIndex}_{i}") });
+                }
+
+                if (twoColumns)
+                {
+                    // compact two-column layout for short values (paired per click-data row)
+                    var paired = new List<InlineKeyboardButton[]>();
+                    for (int i = 0; i < pageButtons.Count; i += 2)
+                    {
+                        paired.Add(pageButtons[i].Concat(pageButtons[i + 1]).ToArray());
+                    }
+                    rows.AddRange(paired);
+                }
+                else
+                {
+                    rows.AddRange(pageButtons);
                 }
 
                 if (pageCount > 1)
@@ -329,8 +348,20 @@ public static class BotKeyboards
                 break;
         }
 
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ К списку фильтров", "fmenu") });
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("✔️ Готово", "fdone"),
+            InlineKeyboardButton.WithCallbackData("⬅️ К списку фильтров", "fmenu")
+        });
         return new InlineKeyboardMarkup(rows);
+    }
+
+    /// <summary>True when the draft contains at least one site-parameter (server-side) filter.</summary>
+    public static bool HasServerFilters(IEnumerable<SavedFilter> filters)
+    {
+        return filters.Any(f => f.Kind is
+            SavedFilterKind.Bool or SavedFilterKind.Single or SavedFilterKind.Multi
+            or SavedFilterKind.Range or SavedFilterKind.Text);
     }
 
     public static InlineKeyboardMarkup OwnFiltersMenu(UserSearchDraft draft)

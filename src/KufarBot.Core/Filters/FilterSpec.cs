@@ -36,6 +36,7 @@ public sealed record FilterSpec
 
 public static class FilterSpecFactory
 {
+    /// <summary>Built-in scenario keys handled by the bot as first-class draft settings (city, prices, subcategory).</summary>
     private static readonly HashSet<string> BuiltInParameterNames = new()
     {
         "region",
@@ -43,10 +44,38 @@ public static class FilterSpecFactory
         "category"
     };
 
-    /// <summary>Search tool toggles that are no attributes of the ad itself — cannot be checked client-side.</summary>
+    /// <summary>
+    /// Not shown as filters: built-in scenario keys, ad-posting/business form fields,
+    /// paid-service flags and other search-tool toggles. None of them can be matched
+    /// client-side against the ad parameter snapshot, and none are search filters on the site.
+    /// </summary>
     private static readonly HashSet<string> NotAdLevelParameterNames = new()
     {
-        "only_with_photo"
+        // search-tool toggles (handled by bot's own filters / not present on ads)
+        "only_with_photo", "only_with_content_video", "photo_3d", "content_video", "ribbons", "name",
+
+        // price/currency/geo are bot-level (min/max price, city)
+        "price", "currency", "region", "area", "category", "parent_category",
+
+        // company posting form / business registry
+        "company_ad", "company_address", "company_number", "shop_address", "web_shop_link",
+        "import_link", "contact_person", "vat_number", "egr_number", "egr_date", "egr_authority",
+        "commercial_register_number", "commercial_register_date", "domestic_register_number",
+        "domestic_register_date",
+
+        // paid-services / cross-posting service flags
+        "regular_price", "delivery_pro", "installment_pro", "sell_out",
+        "multiregion_enabled", "multiregion_regions", "users_synonyms"
+    };
+
+    /// <summary>
+    /// Service boolean flags that ARE stored on ads and filterable on the site
+    /// (observed in ad_parameters of real search results). Every other bool parameter
+    /// (posting form toggles) is skipped.
+    /// </summary>
+    private static readonly HashSet<string> BoolFilterWhitelist = new()
+    {
+        "possible_exchange", "halva", "delivery_enabled", "safedeal_enabled", "b2c_availability"
     };
 
     /// <summary>
@@ -86,59 +115,106 @@ public static class FilterSpecFactory
     }
 
     /// <summary>
-    /// Builds the filter list shown in the wizard for one subcategory.
-    /// The dispatch is fetched for the whole category (parent = category id), so here the
-    /// parameters are selected by the scenario rules:
-    ///   • empty rule  — base parameters of every subcategory in the category;
-    ///   • {"category": "&lt;subcategoryId&gt;"} — parameters specific to this subcategory;
-    ///   • {"category": "...", "&lt;type param&gt;": value} — conditional sub-subcategory parameters (skipped for now);
-    ///   • {"region": ...} / {"area": ...} — region-scenario parameters (skipped).
-    /// Results are sorted by metadata.parameters_order (UI order on Kufar).
+    /// Builds FilterSpecs for every subcategory of the category in one pass.
+    /// Useful together with the client-side cache: одим запросом получает параметры всех подкатегорий.
+    /// Keys = subcategory ids referenced by single-key rules {"category": "..."}.
+    /// Empty rules list (or null) → пустой словарь (вызовет fallback на FromDispatchForSubcategory).
+    /// </summary>
+    public static IReadOnlyDictionary<int, IReadOnlyList<FilterSpec>> FromDispatchByCategory(KufarParametersResponseDto? dispatch)
+    {
+        var container = dispatch?.Metadata?.Parameters;
+        if (container?.Refs == null || container.Rules is not { Count: > 0 })
+        {
+            return new Dictionary<int, IReadOnlyList<FilterSpec>>();
+        }
+
+        var orderIndex = BuildOrderIndex(dispatch!.Metadata?.ParametersOrder);
+
+        var baseRefIds = new List<string>();
+        var subcatRefs = new Dictionary<int, List<string>>();
+
+        foreach (var binding in container.Rules)
+        {
+            var rule = binding.Rule;
+            if (rule == null || rule.Count == 0)
+            {
+                // base scenario: parameters shared by every subcategory
+                baseRefIds.AddRange(binding.Refs ?? new List<string>());
+            }
+            else if (rule.Count == 1 &&
+                     rule.TryGetValue("category", out JsonElement categoryValue) &&
+                     int.TryParse(RuleValueAsText(categoryValue), NumberStyles.Integer, CultureInfo.InvariantCulture, out int subcategoryId))
+            {
+                if (!subcatRefs.TryGetValue(subcategoryId, out var list))
+                {
+                    list = new List<string>();
+                    subcatRefs[subcategoryId] = list;
+                }
+
+                list.AddRange(binding.Refs ?? new List<string>());
+            }
+            // other rules (region/area-bound, type-conditional consequences) are skipped for now
+        }
+
+        var result = new Dictionary<int, IReadOnlyList<FilterSpec>>();
+        foreach (var (subcategoryId, refs) in subcatRefs)
+        {
+            result[subcategoryId] = BuildSpecsForRefSet(baseRefIds.Concat(refs), container.Refs, orderIndex);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Filter parameters for one subcategory. The dispatch must be requested for the whole
+    /// category (parent = category id, e.g. 16000) — subcategory-level requests return 404.
     /// </summary>
     public static List<FilterSpec> FromDispatchForSubcategory(KufarParametersResponseDto? dispatch, int subcategoryId)
     {
+        var map = FromDispatchByCategory(dispatch);
+        if (map.TryGetValue(subcategoryId, out IReadOnlyList<FilterSpec>? specs))
+        {
+            return specs.ToList();
+        }
+
         var container = dispatch?.Metadata?.Parameters;
         if (container?.Refs == null)
         {
             return new List<FilterSpec>();
         }
 
-        string subcategoryIdText = subcategoryId.ToString(CultureInfo.InvariantCulture);
-        var selectedRefIds = new List<string>();
-
-        var rules = container.Rules;
-        if (rules is { Count: > 0 })
-        {
-            foreach (var binding in rules)
-            {
-                var rule = binding.Rule;
-                if (rule == null || rule.Count == 0)
-                {
-                    // base scenario: parameters shared by every subcategory
-                    selectedRefIds.AddRange(binding.Refs ?? new List<string>());
-                }
-                else if (rule.Count == 1 &&
-                         rule.TryGetValue("category", out JsonElement categoryValue) &&
-                         RuleValueAsText(categoryValue) == subcategoryIdText)
-                {
-                    selectedRefIds.AddRange(binding.Refs ?? new List<string>());
-                }
-            }
-        }
-        else
-        {
-            // response without scenario rules — expose everything (compatibility)
-            selectedRefIds.AddRange(container.Refs.Keys);
-        }
-
         var orderIndex = BuildOrderIndex(dispatch!.Metadata?.ParametersOrder);
 
+        if (container.Rules is { Count: > 0 })
+        {
+            // the subcategory has no own rule — base parameters only
+            var baseRefIds = new List<string>();
+            foreach (var binding in container.Rules)
+            {
+                if (binding.Rule == null || binding.Rule.Count == 0)
+                {
+                    baseRefIds.AddRange(binding.Refs ?? new List<string>());
+                }
+            }
+
+            return BuildSpecsForRefSet(baseRefIds, container.Refs, orderIndex);
+        }
+
+        // compatibility: response without scenario rules — expose everything
+        return BuildSpecsForRefSet(container.Refs.Keys, container.Refs, orderIndex);
+    }
+
+    private static List<FilterSpec> BuildSpecsForRefSet(
+        IEnumerable<string> refIds,
+        IReadOnlyDictionary<string, KufarParameterDto> allRefs,
+        Dictionary<int, int> orderIndex)
+    {
         var picked = new List<(int VariationId, FilterSpec Spec)>();
         var seenNames = new HashSet<string>(System.StringComparer.Ordinal);
 
-        foreach (string refId in selectedRefIds.Distinct())
+        foreach (string refId in refIds.Distinct())
         {
-            if (!container.Refs.TryGetValue(refId, out KufarParameterDto? param) ||
+            if (!allRefs.TryGetValue(refId, out KufarParameterDto? param) ||
                 string.IsNullOrWhiteSpace(param.Name) ||
                 BuiltInParameterNames.Contains(param.Name) ||
                 NotAdLevelParameterNames.Contains(param.Name) ||
@@ -148,10 +224,18 @@ public static class FilterSpecFactory
             }
 
             var spec = BuildSpec(param);
-            if (spec != null)
+            if (spec == null)
             {
-                picked.Add((param.VariationId, spec));
+                continue;
             }
+
+            // bool toggles that don't exist as ad attributes would filter everything away
+            if (spec.Kind == FilterKind.Bool && !BoolFilterWhitelist.Contains(spec.Key))
+            {
+                continue;
+            }
+
+            picked.Add((param.VariationId, spec));
         }
 
         return picked
