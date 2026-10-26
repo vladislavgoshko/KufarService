@@ -12,6 +12,73 @@ namespace KufarBot.Tests;
 
 public class FilterEngineTests
 {
+    private const string DispatchRulesJson = @"{""metadata"":{
+        ""parameters"":{
+            ""dispatch_type"":""many"",
+            ""deduplication_key"":""name"",
+            ""refs"":{
+                ""1"":{""variation_id"":1,""name"":""area"",""url_name"":""ar"",""type"":""int"",""meta"":""set""},
+                ""2"":{""variation_id"":2,""name"":""condition"",""url_name"":""cnd"",""type"":""int"",""meta"":""set"",
+                    ""labels"":{""name"":{""ru"":""Состояние""}},
+                    ""values"":[{""value"":1,""labels"":{""ru"":""Новое""}},{""value"":10,""labels"":{""ru"":""Б/у""}}]},
+                ""3"":{""variation_id"":3,""name"":""computers_component_type"",""url_name"":""cct"",""type"":""int"",""meta"":""set"",
+                    ""labels"":{""name"":{""ru"":""Тип""}},
+                    ""values"":[{""value"":5,""labels"":{""ru"":""Процессоры""}},{""value"":10,""labels"":{""ru"":""Видеокарты""}}]},
+                ""4"":{""variation_id"":4,""name"":""socket"",""url_name"":""sck"",""type"":""int"",""meta"":""set"",
+                    ""labels"":{""name"":{""ru"":""Сокет""}},
+                    ""values"":[{""value"":3,""labels"":{""ru"":""AM4""}}]},
+                ""5"":{""variation_id"":5,""name"":""housing_agency"",""url_name"":""ha"",""type"":""bool"",""meta"":""set"",
+                    ""labels"":{""name"":{""ru"":""Региональный параметр""}}}
+            },
+            ""rules"":[
+                {""rule"":{},""refs"":[""1"",""2""]},
+                {""rule"":{""category"":""16010""},""refs"":[""3""]},
+                {""rule"":{""region"":""7""},""refs"":[""5""]},
+                {""rule"":{""category"":""16010"",""computers_component_type"":""5""},""refs"":[""4""]}
+            ]
+        },
+        ""parameters_order"":{""refs"":{""0"":[""3"",""2"",""1""]}}}}";
+
+    [Fact]
+    public void FilterSpecFactory_ForSubcategoryUsesRulesAndOrder()
+    {
+        var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchRulesJson);
+        var specs = FilterSpecFactory.FromDispatchForSubcategory(dispatch, 16010);
+
+        // area skipped (builtin), agency skipped (region rule), socket skipped (conditional type rule)
+        Assert.Equal(2, specs.Count);
+
+        // parameters_order: "3" (Тип) before "2" (Состояние)
+        Assert.Equal("computers_component_type", specs[0].Key);
+        Assert.Equal("condition", specs[1].Key);
+
+        Assert.Equal(FilterKind.Single, specs[0].Kind);
+        Assert.Equal("Тип", specs[0].Title);
+        Assert.Equal(2, specs[0].Options.Count);
+    }
+
+    [Fact]
+    public void FilterSpecFactory_ForOtherSubcategoryReturnsBaseOnly()
+    {
+        var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchRulesJson);
+        var specs = FilterSpecFactory.FromDispatchForSubcategory(dispatch, 16020);
+
+        // base rule gives condition (area skipped); subcategory 16010 rule does not apply
+        Assert.Single(specs);
+        Assert.Equal("condition", specs[0].Key);
+    }
+
+    [Fact]
+    public void FilterSpecFactory_ForSubcategoryWithoutRulesExposesAll()
+    {
+        var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchJson);
+        var specs = FilterSpecFactory.FromDispatchForSubcategory(dispatch, 16010);
+
+        // fallback: no rules -> everything except builtins; order list absent -> original order
+        Assert.All(specs, s => Assert.NotEqual("area", s.Key));
+        Assert.Contains(specs, s => s.Key == "condition");
+    }
+
     private const string DispatchJson = @"{""metadata"":{""parameters"":{
         ""dispatch_type"":""many"",
         ""deduplication_key"":""name"",
@@ -38,8 +105,9 @@ public class FilterEngineTests
         var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchJson);
         var specs = FilterSpecFactory.FromDispatch(dispatch);
 
-        Assert.Equal(4, specs.Count); // area skipped, condition deduplicated (first variation wins)
+        Assert.Equal(3, specs.Count); // area and only_with_photo skipped, condition deduplicated (first variation wins)
         Assert.All(specs, s => Assert.NotEqual("area", s.Key));
+        Assert.All(specs, s => Assert.NotEqual("only_with_photo", s.Key));
 
         var condition = specs.Single(s => s.Key == "condition");
         Assert.Equal(FilterKind.Single, condition.Kind);
@@ -49,9 +117,6 @@ public class FilterEngineTests
         Assert.Equal("Состояние", condition.Title);
         Assert.Equal("Новое", condition.Options[0].Label);
         Assert.Equal("1", condition.Options[0].Value);
-
-        var photo = specs.Single(s => s.Key == "only_with_photo");
-        Assert.Equal(FilterKind.Bool, photo.Kind);
 
         var ram = specs.Single(s => s.Key == "computers_desktop_ram");
         Assert.Equal(FilterKind.Range, ram.Kind);

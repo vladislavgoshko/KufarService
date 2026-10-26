@@ -953,7 +953,10 @@ public class BotEngine : BackgroundService
         {
             using var scope = _serviceProvider.CreateScope();
             var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
-            draft.AvailableSpecs = (await kufarClient.GetFiltersForCategoryAsync(draft.SubcategoryId.Value, ct)).ToList();
+            // CategoryId is guaranteed when a subcategory was chosen; derive 16010 -> 16000 as a fallback
+            int parentCategoryId = draft.CategoryId ?? (draft.SubcategoryId.Value / 100 * 100);
+            draft.AvailableSpecs = (await kufarClient.GetFiltersForSubcategoryAsync(
+                draft.SubcategoryId.Value, parentCategoryId, ct)).ToList();
         }
         catch (Exception ex)
         {

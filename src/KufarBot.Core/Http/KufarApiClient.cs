@@ -89,10 +89,10 @@ public class KufarApiClient : IKufarApiClient
         return categories.OrderBy(c => c.Order).ToList();
     }
 
-    public async Task<IReadOnlyList<FilterSpec>> GetFiltersForCategoryAsync(int categoryId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<FilterSpec>> GetFiltersForSubcategoryAsync(int subcategoryId, int parentCategoryId, CancellationToken ct = default)
     {
         string url =
-            $"https://api.kufar.by/taxonomy-proxy/v1/dispatch?routing=web_generalist&application=ad_listing&platform=web&taxonomy-version=1&parent={categoryId}";
+            $"https://api.kufar.by/taxonomy-proxy/v1/dispatch?routing=web_generalist&application=ad_listing&platform=web&taxonomy-version=1&parent={parentCategoryId}";
 
         using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
@@ -100,6 +100,6 @@ public class KufarApiClient : IKufarApiClient
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         var dispatch = await JsonSerializer.DeserializeAsync<KufarParametersResponseDto>(stream, JsonOptions, ct);
 
-        return FilterSpecFactory.FromDispatch(dispatch);
+        return FilterSpecFactory.FromDispatchForSubcategory(dispatch, subcategoryId);
     }
 }

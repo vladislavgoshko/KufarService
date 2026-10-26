@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace KufarBot.Core.Http.Dto;
@@ -17,6 +18,10 @@ public class KufarParametersMetadataDto
 {
     [JsonPropertyName("parameters")]
     public KufarParametersContainerDto? Parameters { get; set; }
+
+    /// <summary>Global UI order of parameter variations (metadata.parameters_order).</summary>
+    [JsonPropertyName("parameters_order")]
+    public KufarParametersOrderDto? ParametersOrder { get; set; }
 }
 
 public class KufarParametersContainerDto
@@ -29,6 +34,31 @@ public class KufarParametersContainerDto
 
     [JsonPropertyName("refs")]
     public Dictionary<string, KufarParameterDto>? Refs { get; set; }
+
+    /// <summary>
+    /// Scenario bindings: empty rule = base parameters of the category,
+    /// {"category":"16010"} = subcategory-specific, {"category":"16010", "&lt;param&gt;":"5"} =
+    /// conditional parameters of an ad type (sub-subcategory), {"region":"7"} = region-specific.
+    /// </summary>
+    [JsonPropertyName("rules")]
+    public List<KufarParameterRuleBindingDto>? Rules { get; set; }
+}
+
+public class KufarParameterRuleBindingDto
+{
+    /// <summary>Condition map; empty object means the base scenario.</summary>
+    [JsonPropertyName("rule")]
+    public Dictionary<string, JsonElement>? Rule { get; set; }
+
+    [JsonPropertyName("refs")]
+    public List<string>? Refs { get; set; }
+}
+
+public class KufarParametersOrderDto
+{
+    // single scenario key ("0") -> ordered variation ids
+    [JsonPropertyName("refs")]
+    public Dictionary<string, List<string>>? Refs { get; set; }
 }
 
 public class KufarParameterDto
@@ -65,6 +95,21 @@ public class KufarParameterDto
     [JsonPropertyName("values")]
     public List<KufarParameterValueDto>? Values { get; set; }
 
+    [JsonPropertyName("min_taxonomy_version")]
+    public int MinTaxonomyVersion { get; set; }
+
+    [JsonPropertyName("is_type")]
+    public bool IsType { get; set; }
+
+    [JsonPropertyName("hint")]
+    public string? Hint { get; set; }
+
+    [JsonPropertyName("image_url")]
+    public string? ImageUrl { get; set; }
+
+    [JsonPropertyName("external_values_url")]
+    public string? ExternalValuesUrl { get; set; }
+
     [JsonPropertyName("ui_component")]
     public KufarUIComponentDto? UIComponent { get; set; }
 }
@@ -72,13 +117,13 @@ public class KufarParameterDto
 public class KufarRangeDto
 {
     [JsonPropertyName("lower")]
-    public int Lower { get; set; }
+    public decimal Lower { get; set; }
 
     [JsonPropertyName("step")]
-    public int Step { get; set; }
+    public decimal Step { get; set; }
 
     [JsonPropertyName("upper")]
-    public int Upper { get; set; }
+    public decimal Upper { get; set; }
 }
 
 public class KufarUIComponentDto

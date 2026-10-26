@@ -16,5 +16,9 @@ public interface IKufarApiClient
 {
     Task<KufarSearchResult> SearchAsync(KufarSearchCriteria criteria, CancellationToken ct = default);
     Task<IReadOnlyList<KufarCategory>> GetCategoryTreeAsync(CancellationToken ct = default);
-    Task<IReadOnlyList<FilterSpec>> GetFiltersForCategoryAsync(int categoryId, CancellationToken ct = default);
+    /// <summary>
+    /// Filter parameters for one subcategory. The dispatch must be requested for the whole
+    /// category (parent = category id, e.g. 16000) — subcategory-level requests (parent=16010) return 404.
+    /// </summary>
+    Task<IReadOnlyList<FilterSpec>> GetFiltersForSubcategoryAsync(int subcategoryId, int parentCategoryId, CancellationToken ct = default);
 }
