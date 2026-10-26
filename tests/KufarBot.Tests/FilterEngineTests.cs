@@ -96,6 +96,9 @@ public class FilterEngineTests
                 ""ui_component"":{""type"":""input_range""}},
             ""10098"":{""variation_id"":10098,""name"":""users_synonyms"",""url_name"":""usn"",""type"":""string"",""meta"":""free"",""multi"":false,
                 ""labels"":{""name"":{""ru"":""Синонимы""}},
+                ""values"":[]},
+            ""10099"":{""variation_id"":10099,""name"":""other_parameters"",""url_name"":""otp"",""type"":""string"",""meta"":""free"",""multi"":false,
+                ""labels"":{""name"":{""ru"":""Заполните""}},
                 ""values"":[]}
         }}}}";
 
@@ -105,7 +108,7 @@ public class FilterEngineTests
         var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchJson);
         var specs = FilterSpecFactory.FromDispatch(dispatch);
 
-        Assert.Equal(2, specs.Count); // area/only_with_photo/users_synonyms skipped, condition deduplicated (first variation wins)
+        Assert.Equal(2, specs.Count); // area/only_with_photo/users_synonyms/Заполните-junk skipped, condition deduplicated (first variation wins)
         Assert.All(specs, s => Assert.NotEqual("area", s.Key));
         Assert.All(specs, s => Assert.NotEqual("only_with_photo", s.Key));
         Assert.All(specs, s => Assert.NotEqual("users_synonyms", s.Key));
@@ -129,25 +132,55 @@ public class FilterEngineTests
     public void FilterSpecFactory_ByCategoryBuildsMapForSubcategoryRules()
     {
         var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchRulesJson);
-        var map = FilterSpecFactory.FromDispatchByCategory(dispatch);
+        var bundle = FilterSpecFactory.FromDispatchByCategory(dispatch);
 
         // subcategory rule detected; region-bound rule is not a subcategory
-        Assert.Single(map);
-        Assert.True(map.ContainsKey(16010));
+        Assert.Single(bundle.BySubcategory);
+        Assert.True(bundle.BySubcategory.ContainsKey(16010));
 
-        var specs = map[16010];
+        var specs = bundle.BySubcategory[16010];
         Assert.Equal(2, specs.Count); // base condition + subcategory's Тип, ordered as on the site
         Assert.Equal("computers_component_type", specs[0].Key);
         Assert.Equal("condition", specs[1].Key);
+
+        // the conditional {"category":"16010", "computers_component_type":"5"} rule is recognized
+        Assert.Single(bundle.Conditionals[16010]);
+        Assert.Equal("computers_component_type", bundle.Conditionals[16010][0].DriverKey);
+        Assert.Equal(new[] { "5" }, bundle.Conditionals[16010][0].DriverValues);
+        Assert.Single(bundle.Conditionals[16010][0].Specs);
+        Assert.Equal("socket", bundle.Conditionals[16010][0].Specs[0].Key);
     }
 
     [Fact]
-    public void FilterSpecFactory_ByCategoryWithoutRulesReturnsEmptyMap()
+    public void FilterSpecFactory_ByCategoryWithoutRulesReturnsEmptyBundle()
     {
         var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchJson);
-        var map = FilterSpecFactory.FromDispatchByCategory(dispatch);
+        var bundle = FilterSpecFactory.FromDispatchByCategory(dispatch);
 
-        Assert.Empty(map);
+        Assert.Empty(bundle.BySubcategory);
+        Assert.Empty(bundle.Conditionals);
+    }
+
+    [Fact]
+    public void FilterSpecFactory_ConditionalSpecsAppearOnlyWhenDriverValueChosen()
+    {
+        var dispatch = JsonSerializer.Deserialize<KufarParametersResponseDto>(DispatchRulesJson);
+
+        // no driver chosen yet -> only base + subcategory parameters
+        var withoutValues = FilterSpecFactory.FromDispatchForSubcategory(dispatch, 16010);
+        Assert.DoesNotContain(withoutValues, s => s.Key == "socket");
+
+        // driver condition met -> extra «socket» parameter joins the list
+        var withValues = FilterSpecFactory.FromDispatchForSubcategory(
+            dispatch, 16010,
+            new Dictionary<string, IReadOnlyList<string>> { ["computers_component_type"] = new[] { "5" } });
+        Assert.Contains(withValues, s => s.Key == "socket");
+
+        // driver chosen but different value -> still hidden
+        var otherValue = FilterSpecFactory.FromDispatchForSubcategory(
+            dispatch, 16010,
+            new Dictionary<string, IReadOnlyList<string>> { ["computers_component_type"] = new[] { "17" } });
+        Assert.DoesNotContain(otherValue, s => s.Key == "socket");
     }
 
     [Fact]

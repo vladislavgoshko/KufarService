@@ -65,7 +65,10 @@ public static class FilterSpecFactory
 
         // paid-services / cross-posting service flags
         "regular_price", "delivery_pro", "installment_pro", "sell_out",
-        "multiregion_enabled", "multiregion_regions", "users_synonyms"
+        "multiregion_enabled", "multiregion_regions", "users_synonyms",
+
+        // visible only in the posting form, not as search filters
+        "shop_guarantee", "other_parameters", "season", "remuneration_type"
     };
 
     /// <summary>
@@ -120,18 +123,21 @@ public static class FilterSpecFactory
     /// Keys = subcategory ids referenced by single-key rules {"category": "..."}.
     /// Empty rules list (or null) → пустой словарь (вызовет fallback на FromDispatchForSubcategory).
     /// </summary>
-    public static IReadOnlyDictionary<int, IReadOnlyList<FilterSpec>> FromDispatchByCategory(KufarParametersResponseDto? dispatch)
+    public static CategoryFilterSpecs FromDispatchByCategory(KufarParametersResponseDto? dispatch)
     {
         var container = dispatch?.Metadata?.Parameters;
         if (container?.Refs == null || container.Rules is not { Count: > 0 })
         {
-            return new Dictionary<int, IReadOnlyList<FilterSpec>>();
+            return new CategoryFilterSpecs(
+                new Dictionary<int, IReadOnlyList<FilterSpec>>(),
+                new Dictionary<int, IReadOnlyList<ConditionalRule>>());
         }
 
         var orderIndex = BuildOrderIndex(dispatch!.Metadata?.ParametersOrder);
 
         var baseRefIds = new List<string>();
         var subcatRefs = new Dictionary<int, List<string>>();
+        var conditionals = new Dictionary<int, List<ConditionalRule>>();
 
         foreach (var binding in container.Rules)
         {
@@ -140,10 +146,12 @@ public static class FilterSpecFactory
             {
                 // base scenario: parameters shared by every subcategory
                 baseRefIds.AddRange(binding.Refs ?? new List<string>());
+                continue;
             }
-            else if (rule.Count == 1 &&
-                     rule.TryGetValue("category", out JsonElement categoryValue) &&
-                     int.TryParse(RuleValueAsText(categoryValue), NumberStyles.Integer, CultureInfo.InvariantCulture, out int subcategoryId))
+
+            if (rule.Count == 1 &&
+                rule.TryGetValue("category", out JsonElement categoryValue) &&
+                int.TryParse(RuleValueAsText(categoryValue), NumberStyles.Integer, CultureInfo.InvariantCulture, out int subcategoryId))
             {
                 if (!subcatRefs.TryGetValue(subcategoryId, out var list))
                 {
@@ -152,8 +160,25 @@ public static class FilterSpecFactory
                 }
 
                 list.AddRange(binding.Refs ?? new List<string>());
+                continue;
             }
-            // other rules (region/area-bound, type-conditional consequences) are skipped for now
+
+            if (rule.Count == 2 && rule.TryGetValue("category", out JsonElement condCategoryValue))
+            {
+                // conditional: {"category": "...", "<driver>": "value" | "$in[1,5]"}
+                var conditional = TryBuildConditionalRule(binding, container.Refs, orderIndex, condCategoryValue);
+                if (conditional != null)
+                {
+                    if (!conditionals.TryGetValue(conditional.SubcategoryId, out var rules))
+                    {
+                        rules = new List<ConditionalRule>();
+                        conditionals[conditional.SubcategoryId] = rules;
+                    }
+
+                    rules.Add(conditional);
+                }
+            }
+            // other rules (region/area-bound, paid-services consequences) are skipped
         }
 
         var result = new Dictionary<int, IReadOnlyList<FilterSpec>>();
@@ -162,21 +187,26 @@ public static class FilterSpecFactory
             result[subcategoryId] = BuildSpecsForRefSet(baseRefIds.Concat(refs), container.Refs, orderIndex);
         }
 
-        return result;
+        var condResult = new Dictionary<int, IReadOnlyList<ConditionalRule>>();
+        foreach (var (id, list) in conditionals)
+        {
+            condResult[id] = list;
+        }
+
+        return new CategoryFilterSpecs(result, condResult);
     }
 
     /// <summary>
     /// Filter parameters for one subcategory. The dispatch must be requested for the whole
     /// category (parent = category id, e.g. 16000) — subcategory-level requests return 404.
+    /// <paramref name="conditionalValues"/> = chosen values of driver parameters (e.g. Тип),
+    /// enabling the value-driven extra parameters («Тип → Сокет»).
     /// </summary>
-    public static List<FilterSpec> FromDispatchForSubcategory(KufarParametersResponseDto? dispatch, int subcategoryId)
+    public static List<FilterSpec> FromDispatchForSubcategory(
+        KufarParametersResponseDto? dispatch,
+        int subcategoryId,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? conditionalValues = null)
     {
-        var map = FromDispatchByCategory(dispatch);
-        if (map.TryGetValue(subcategoryId, out IReadOnlyList<FilterSpec>? specs))
-        {
-            return specs.ToList();
-        }
-
         var container = dispatch?.Metadata?.Parameters;
         if (container?.Refs == null)
         {
@@ -185,23 +215,132 @@ public static class FilterSpecFactory
 
         var orderIndex = BuildOrderIndex(dispatch!.Metadata?.ParametersOrder);
 
-        if (container.Rules is { Count: > 0 })
+        if (container.Rules is not { Count: > 0 })
         {
-            // the subcategory has no own rule — base parameters only
-            var baseRefIds = new List<string>();
-            foreach (var binding in container.Rules)
-            {
-                if (binding.Rule == null || binding.Rule.Count == 0)
-                {
-                    baseRefIds.AddRange(binding.Refs ?? new List<string>());
-                }
-            }
-
-            return BuildSpecsForRefSet(baseRefIds, container.Refs, orderIndex);
+            // compatibility: response without scenario rules — expose everything
+            return BuildSpecsForRefSet(container.Refs.Keys, container.Refs, orderIndex);
         }
 
-        // compatibility: response without scenario rules — expose everything
-        return BuildSpecsForRefSet(container.Refs.Keys, container.Refs, orderIndex);
+        string subcategoryIdText = subcategoryId.ToString(CultureInfo.InvariantCulture);
+        var selectedRefIds = new List<string>();
+
+        foreach (var binding in container.Rules)
+        {
+            var rule = binding.Rule;
+            if (rule == null || rule.Count == 0)
+            {
+                // base scenario: parameters shared by every subcategory
+                selectedRefIds.AddRange(binding.Refs ?? new List<string>());
+                continue;
+            }
+
+            if (rule.Count == 2 &&
+                rule.TryGetValue("category", out JsonElement categoryValue) &&
+                RuleValueAsText(categoryValue) == subcategoryIdText &&
+                TryGetDriverValues(rule, out string driverKey, out var driverValues) &&
+                MatchesCondition(driverKey, driverValues, conditionalValues))
+            {
+                selectedRefIds.AddRange(binding.Refs ?? new List<string>());
+                continue;
+            }
+
+            if (rule.Count == 1 &&
+                rule.TryGetValue("category", out JsonElement subValue) &&
+                RuleValueAsText(subValue) == subcategoryIdText)
+            {
+                selectedRefIds.AddRange(binding.Refs ?? new List<string>());
+            }
+        }
+
+        return BuildSpecsForRefSet(selectedRefIds, container.Refs, orderIndex);
+    }
+
+    private static bool TryGetDriverValues(
+        IReadOnlyDictionary<string, JsonElement> rule,
+        out string driverKey,
+        out List<string> driverValues)
+    {
+        driverKey = "";
+        driverValues = new List<string>();
+
+        foreach (var kv in rule)
+        {
+            if (kv.Key == "category")
+            {
+                continue;
+            }
+
+            driverKey = kv.Key;
+            string text = RuleValueAsText(kv.Value) ?? "";
+
+            if (text.StartsWith("$in[", System.StringComparison.OrdinalIgnoreCase) && text.EndsWith("]", System.StringComparison.OrdinalIgnoreCase))
+            {
+                string inner = text.Substring(4, text.Length - 5);
+                foreach (var part in inner.Split(','))
+                {
+                    string token = part.Trim();
+                    if (token.Length > 0)
+                    {
+                        driverValues.Add(token);
+                    }
+                }
+            }
+            else if (text.Length > 0)
+            {
+                driverValues.Add(text);
+            }
+
+            return driverValues.Count > 0;
+        }
+
+        return false;
+    }
+
+    private static bool MatchesCondition(
+        string driverKey,
+        List<string> driverValues,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? conditionalValues)
+    {
+        if (conditionalValues == null ||
+            !conditionalValues.TryGetValue(driverKey, out IReadOnlyList<string>? chosen))
+        {
+            return false;
+        }
+
+        foreach (string value in driverValues)
+        {
+            if (chosen.Contains(value, StringComparer.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static ConditionalRule? TryBuildConditionalRule(
+        KufarParameterRuleBindingDto binding,
+        IReadOnlyDictionary<string, KufarParameterDto> allRefs,
+        Dictionary<int, int> orderIndex,
+        JsonElement categoryValue)
+    {
+        if (!int.TryParse(RuleValueAsText(categoryValue), NumberStyles.Integer, CultureInfo.InvariantCulture, out int subcategoryId))
+        {
+            return null;
+        }
+
+        if (!TryGetDriverValues(binding.Rule!, out string driverKey, out var driverValues))
+        {
+            return null;
+        }
+
+        var specs = BuildSpecsForRefSet(binding.Refs ?? new List<string>(), allRefs, orderIndex);
+        if (specs.Count == 0)
+        {
+            return null;
+        }
+
+        return new ConditionalRule(subcategoryId, driverKey, driverValues, specs);
     }
 
     private static List<FilterSpec> BuildSpecsForRefSet(
@@ -218,6 +357,7 @@ public static class FilterSpecFactory
                 string.IsNullOrWhiteSpace(param.Name) ||
                 BuiltInParameterNames.Contains(param.Name) ||
                 NotAdLevelParameterNames.Contains(param.Name) ||
+                IsJunkLabel(param.Labels?.Name?.Ru) ||
                 !seenNames.Add(param.Name))
             {
                 continue;
@@ -242,6 +382,14 @@ public static class FilterSpecFactory
             .OrderBy(p => orderIndex.TryGetValue(p.VariationId, out int index) ? index : int.MaxValue)
             .Select(p => p.Spec)
             .ToList();
+    }
+
+    /// <summary>Labels of the posting form («Заполните ...») that never appear as search filters.</summary>
+    private static bool IsJunkLabel(string? label)
+    {
+        return !string.IsNullOrWhiteSpace(label) &&
+               (label.StartsWith("Заполните", System.StringComparison.OrdinalIgnoreCase) ||
+                label.StartsWith("Введите", System.StringComparison.OrdinalIgnoreCase));
     }
 
     private static Dictionary<int, int> BuildOrderIndex(KufarParametersOrderDto? order)

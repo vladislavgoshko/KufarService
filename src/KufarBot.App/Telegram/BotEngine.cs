@@ -993,7 +993,7 @@ public class BotEngine : BackgroundService
 
         try
         {
-            draft.AvailableSpecs = await LoadSubcategorySpecsAsync(draft, ct);
+            draft.AvailableSpecs = await LoadSubcategorySpecsAsync(draft, null, ct);
         }
         catch (Exception ex)
         {
@@ -1002,14 +1002,78 @@ public class BotEngine : BackgroundService
     }
 
     /// <summary>Loads filter specs for the draft's subcategory (served from the client's category cache when warm).</summary>
-    private async Task<List<FilterSpec>> LoadSubcategorySpecsAsync(UserSearchDraft draft, CancellationToken ct)
+    private async Task<List<FilterSpec>> LoadSubcategorySpecsAsync(
+        UserSearchDraft draft,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? conditionalValues,
+        CancellationToken ct)
     {
         using var scope = _serviceProvider.CreateScope();
         var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
         // CategoryId is guaranteed when a subcategory was chosen; derive 16010 -> 16000 as a fallback
         int parentCategoryId = draft.CategoryId ?? (draft.SubcategoryId!.Value / 100 * 100);
         return (await kufarClient.GetFiltersForSubcategoryAsync(
-            draft.SubcategoryId!.Value, parentCategoryId, ct)).ToList();
+            draft.SubcategoryId!.Value, parentCategoryId, conditionalValues, ct)).ToList();
+    }
+
+    /// <summary>Chosen values of already-set choice filters — drivers for conditional (type-level) parameters.</summary>
+    private static Dictionary<string, IReadOnlyList<string>> ConditionalValuesFromDraft(UserSearchDraft draft)
+    {
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var filter in draft.Filters)
+        {
+            if (filter.Kind is not (SavedFilterKind.Single or SavedFilterKind.Multi or SavedFilterKind.Bool) ||
+                string.IsNullOrWhiteSpace(filter.Key) ||
+                filter.Values.Count == 0)
+            {
+                continue;
+            }
+
+            if (result.TryGetValue(filter.Key, out IReadOnlyList<string>? existing))
+            {
+                var merged = existing.Concat(filter.Values).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                result[filter.Key] = merged;
+            }
+            else
+            {
+                result[filter.Key] = filter.Values;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Rebuilds the spec list with the current chosen values (activating the type-conditional filters)
+    /// and re-renders the spec screen, keeping focus on the same filter by key.
+    /// Returns the (possibly shifted) index of the spec.
+    /// </summary>
+    private async Task<int> RefreshSpecsAndLocateAsync(UserSearchDraft draft, FilterSpec spec, int oldSpecIndex, CancellationToken ct)
+    {
+        if (draft.SubcategoryId == null || draft.Wizard == null)
+        {
+            return oldSpecIndex;
+        }
+
+        try
+        {
+            var fresh = await LoadSubcategorySpecsAsync(draft, ConditionalValuesFromDraft(draft), ct);
+            if (fresh.Count != draft.AvailableSpecs.Count)
+            {
+                draft.AvailableSpecs = fresh;
+                int idx = fresh.FindIndex(s => string.Equals(s.Key, spec.Key, StringComparison.Ordinal));
+                if (idx >= 0)
+                {
+                    draft.Wizard.SpecIndex = idx;
+                    return idx;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[BotEngine] Failed to refresh conditional specs for subcategory {SubId}", draft.SubcategoryId);
+        }
+
+        return oldSpecIndex;
     }
 
     /// <summary>
@@ -1150,8 +1214,10 @@ public class BotEngine : BackgroundService
             }
         }
 
+        int updatedSpecIndex = await RefreshSpecsAndLocateAsync(draft, spec, specIndex, ct);
+
         await EditOrSendMessageAsync(botClient, chatId, messageId,
-            FilterWizardUI.RenderSpecScreen(draft, specIndex), BotKeyboards.FilterOptionsMenu(draft, specIndex), ct);
+            FilterWizardUI.RenderSpecScreen(draft, updatedSpecIndex), BotKeyboards.FilterOptionsMenu(draft, updatedSpecIndex), ct);
     }
 
     private async Task ToggleMultiOptionAsync(
@@ -1197,8 +1263,10 @@ public class BotEngine : BackgroundService
             Values = values
         });
 
+        int updatedSpecIndex = await RefreshSpecsAndLocateAsync(draft, spec, specIndex, ct);
+
         await EditOrSendMessageAsync(botClient, chatId, messageId,
-            FilterWizardUI.RenderSpecScreen(draft, specIndex), BotKeyboards.FilterOptionsMenu(draft, specIndex), ct);
+            FilterWizardUI.RenderSpecScreen(draft, updatedSpecIndex), BotKeyboards.FilterOptionsMenu(draft, updatedSpecIndex), ct);
     }
 
     private async Task FinishWizardAsync(
