@@ -101,11 +101,13 @@ public class KufarParameterDto
     [JsonPropertyName("is_type")]
     public bool IsType { get; set; }
 
+    /// <summary>Localized hint text; on the wire it can be an object {ru, by} — bound as raw JSON.</summary>
     [JsonPropertyName("hint")]
-    public string? Hint { get; set; }
+    public JsonElement? Hint { get; set; }
 
+    /// <summary>May be string, object or absent depending on the parameter — bound as raw JSON.</summary>
     [JsonPropertyName("image_url")]
-    public string? ImageUrl { get; set; }
+    public JsonElement? ImageUrl { get; set; }
 
     [JsonPropertyName("external_values_url")]
     public string? ExternalValuesUrl { get; set; }
