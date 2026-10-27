@@ -106,7 +106,8 @@ public static class BotKeyboards
             rows.Add(new[]
             {
                 InlineKeyboardButton.WithCallbackData(
-                    draft.Filters.Count > 0 ? $"🎛 Фильтры ({draft.Filters.Count})" : "🎛 Фильтры", "fmenu")
+                    draft.Filters.Count > 0 ? $"🎛 Фильтры ({draft.Filters.Count})" : "🎛 Фильтры", "fmenu"),
+                InlineKeyboardButton.WithCallbackData("👁 Примеры", "fpreview")
             });
             rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✅ Сохранить подписку", "draft_save") });
         }
@@ -159,6 +160,27 @@ public static class BotKeyboards
 
         rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад к черновику", "menu_draft") });
 
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    /// <summary>eph-11: preview results — one URL button per example ad, then back to the draft.</summary>
+    public static InlineKeyboardMarkup PreviewResultsMenu(IReadOnlyList<Advertisement> ads)
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+
+        for (int i = 0; i < ads.Count; i++)
+        {
+            var ad = ads[i];
+
+            string label = ad.PriceByn.HasValue && ad.PriceByn.Value > 0
+                ? $"{i + 1}. {ad.FormattedPrice} — {ad.Title}"
+                : $"{i + 1}. {ad.Title}";
+            label = label.Length > 64 ? label.Substring(0, 61) + "…" : label;
+
+            rows.Add(new[] { InlineKeyboardButton.WithUrl(label, ad.AdLink) });
+        }
+
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ К черновику", "menu_draft") });
         return new InlineKeyboardMarkup(rows);
     }
 

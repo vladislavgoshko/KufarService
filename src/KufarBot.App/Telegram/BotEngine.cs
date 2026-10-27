@@ -454,6 +454,22 @@ public class BotEngine : BackgroundService
             return;
         }
 
+        // Preview: live example ads matching the current draft (eph-11)
+        if (data == "fpreview")
+        {
+            var draft = _sessionStore.GetOrCreateDraft(userId);
+            if (!draft.SubcategoryId.HasValue)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Сначала выберите подкатегорию поиска.",
+                    BotKeyboards.SearchDraftMenu(draft), ct);
+                return;
+            }
+
+            await SendDraftPreviewAsync(botClient, chatId, messageId, kufarClient, draft, ct);
+            return;
+        }
+
         // ===================== Filter wizard =====================
 
         if (data == "fmenu")
@@ -1475,6 +1491,123 @@ public class BotEngine : BackgroundService
         await EditOrSendMessageAsync(botClient, chatId, messageId,
             $"⚙️ <b>Настройка параметров поиска:</b>\n\n{FormatDraftSummary(draft)}",
             BotKeyboards.SearchDraftMenu(draft), ct);
+    }
+
+    /// <summary>
+    /// eph-11: live preview of the current draft — fetches the first page of Kufar results
+    /// with URL filters applied server-side, then re-checks every draft filter client-side
+    /// (exactly as subscription delivery does) and shows the top matches.
+    /// </summary>
+    private async Task SendDraftPreviewAsync(
+        ITelegramBotClient botClient,
+        long chatId,
+        int messageId,
+        IKufarApiClient kufarClient,
+        UserSearchDraft draft,
+        CancellationToken ct)
+    {
+        var urlFilters = UrlFiltersBuilder.Build(draft.Filters);
+        var criteria = new KufarSearchCriteria
+        {
+            CategoryId = draft.SubcategoryId,
+            AreaId = draft.CityId,
+            MinPriceByn = draft.MinPriceByn,
+            MaxPriceByn = draft.MaxPriceByn,
+            UrlFilters = urlFilters.Count > 0 ? urlFilters : null,
+            Size = 50,
+            Sort = "lst.d"
+        };
+
+        KufarSearchResult result;
+        try
+        {
+            result = await kufarClient.SearchAsync(criteria, ct);
+        }
+        catch (Exception ex) when (urlFilters.Count > 0)
+        {
+            // Unknown/invalid filter names make Kufar reject the whole request (422) —
+            // retry without URL filters; the complete filter set is still applied client-side.
+            _logger.LogWarning(ex, "[BotEngine] Preview: Kufar rejected URL filters, retrying without them.");
+            result = await kufarClient.SearchAsync(criteria with { UrlFilters = null }, ct);
+        }
+
+        // Client-side matching mirrors subscription delivery (SearchMatchingExtensions.Matches):
+        // prices + every SavedFilter incl. the bot's own (query, keywords, seller, age).
+        var matcher = new UserSearchEntity
+        {
+            UserId = 0,
+            SubcategoryId = draft.SubcategoryId!.Value,
+            SubcategoryTitle = draft.SubcategoryTitle ?? string.Empty,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+            MinPriceByn = draft.MinPriceByn,
+            MaxPriceByn = draft.MaxPriceByn,
+            FiltersJson = SavedFilter.Serialize(draft.Filters)
+        };
+
+        var nowUtc = DateTime.UtcNow;
+        var matches = result.Ads
+            .Where(ad => matcher.Matches(ad))
+            .OrderByDescending(ad => ad.ListTimeUtc)
+            .ToList();
+        var top = matches.Take(5).ToList();
+
+        string header = $"👁 <b>Предпросмотр поиска</b>\n\n{FormatDraftSummary(draft)}\n";
+
+        if (matches.Count == 0)
+        {
+            string siteTotal = result.Total is > 0
+                ? $"\n⚠️ Сайт выдаёт {result.Total} объявл., но ни одно не проходит все фильтры."
+                : "";
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"{header}❌ <b>Ничего не найдено</b> по текущим критериям{siteTotal}\n\n<i>Попробуйте расширить диапазон цен или убрать часть фильтров.</i>",
+                new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ К черновику", "menu_draft") }
+                }), ct);
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            header + $"✅ Подходящих объявлений (первая страница выдачи): <b>{matches.Count}</b>\n"
+        };
+
+        for (int i = 0; i < top.Count; i++)
+        {
+            var ad = top[i];
+            int n = i + 1;
+            lines.Add(
+                $"<a href=\"{ad.AdLink}\">{n}. {FilterWizardUI.Escape(ad.Title)}</a>\n" +
+                $"💰 {FilterWizardUI.Escape(ad.FormattedPrice)} • 📍 {FilterWizardUI.Escape(ad.Location)} • 🕒 {FilterWizardUI.Escape(FormatAgeShort(ad.ListTimeUtc, nowUtc))}");
+        }
+
+        // Double-check: an inline URL button per result — matches the favorites-list UX.
+        await EditOrSendMessageAsync(botClient, chatId, messageId,
+            string.Join("\n\n", lines), BotKeyboards.PreviewResultsMenu(top), ct);
+    }
+
+    private static string FormatAgeShort(DateTime listTimeUtc, DateTime nowUtc)
+    {
+        TimeSpan age = nowUtc - listTimeUtc;
+        if (age < TimeSpan.Zero)
+        {
+            age = TimeSpan.Zero;
+        }
+
+        if (age.TotalHours < 1)
+        {
+            return $"{Math.Max(1, (int)age.TotalMinutes)} мин назад";
+        }
+
+        if (age.TotalHours < 24)
+        {
+            return $"{(int)age.TotalHours} ч назад";
+        }
+
+        int days = (int)age.TotalDays;
+        return days == 1 ? "1 дн назад" : $"{days} дн назад";
     }
 
     private async Task HandleFilterTextInputAsync(
