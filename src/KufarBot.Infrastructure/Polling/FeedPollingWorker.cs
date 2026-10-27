@@ -316,6 +316,7 @@ public class FeedPollingWorker : BackgroundService
                         Location = ad.Location,
                         AdLink = ad.AdLink,
                         ImageUrl = ad.ImageUrl,
+                        AllImageUrls = new List<string>(ad.AllImageUrls),
                         CreatedAtUtc = ad.ListTimeUtc
                     };
 
@@ -369,6 +370,8 @@ public class OutboxPayload
     public string Location { get; set; } = string.Empty;
     public string AdLink { get; set; } = string.Empty;
     public string? ImageUrl { get; set; }
+    /// <summary>All ad images (eph-9): >1 → the message is sent as a photo album.</summary>
+    public List<string> AllImageUrls { get; set; } = new();
     public DateTime CreatedAtUtc { get; set; }
     /// <summary>Price shown in price-drop notifications ("was X").</summary>
     public string? OldPriceFormatted { get; set; }

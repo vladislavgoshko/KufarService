@@ -251,6 +251,33 @@ public class OutboxDeliveryWorker : BackgroundService
         InlineKeyboardMarkup? replyMarkup,
         CancellationToken ct)
     {
+        try
+        {
+            // eph-9: multiple images → a photo album; the album cannot carry an inline
+            // keyboard, so the details + buttons go in a follow-up text message.
+            var album = payload.AllImageUrls?
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Take(10)
+                .ToList();
+
+            if (album != null && album.Count > 1)
+            {
+                var items = new List<(string, string?)>(album.Count);
+                for (int i = 0; i < album.Count; i++)
+                {
+                    items.Add((album[i], i == 0 ? htmlMessage : null));
+                }
+
+                await telegramSender.SendMediaGroupAsync(userId, items, ct);
+                await telegramSender.SendTextMessageAsync(userId, FollowUpHtml(payload), replyMarkup, ct);
+                return;
+            }
+        }
+        catch (Exception albumEx)
+        {
+            _logger.LogWarning(albumEx, "[OutboxDeliveryWorker] Album send failed for UserId={UserId}, falling back to photo/text.", userId);
+        }
+
         var photoUrl = payload.ImageUrl;
 
         if (string.IsNullOrWhiteSpace(photoUrl))
@@ -328,6 +355,16 @@ public class OutboxDeliveryWorker : BackgroundService
                        $"⏰ Дата: {payload.CreatedAtUtc:dd.MM.yyyy HH:mm} UTC\n\n" +
                        $"<a href=\"{link}\">Открыть объявление →</a>";
         }
+    }
+
+    /// <summary>Short text under the photo album (the caption already carries the details).</summary>
+    private static string FollowUpHtml(OutboxPayload payload)
+    {
+        var title = System.Net.WebUtility.HtmlEncode(payload.Title);
+        var price = System.Net.WebUtility.HtmlEncode(payload.PriceFormatted);
+        var location = System.Net.WebUtility.HtmlEncode(payload.Location);
+        return $"<a href=\"{payload.AdLink}\"><b>{title}</b></a>\n" +
+               $"💰 {price} • 📍 {location}";
     }
 
     private async Task HandleTransientFailureAsync(AppDbContext dbContext, NotificationOutboxEntity item, string error, CancellationToken ct)

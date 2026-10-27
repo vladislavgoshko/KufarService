@@ -18,6 +18,12 @@ public interface ITelegramSender
     /// cannot deliver the photo (e.g. bad URL) — the caller must decide on fallback.
     /// </summary>
     Task SendPhotoAsync(long chatId, string photoUrl, string htmlCaption, InlineKeyboardMarkup? replyMarkup = null, CancellationToken ct = default);
+
+    /// <summary>
+    /// eph-9: sends a photo album (2–10 items). The caption of the first item becomes the
+    /// group caption. Inline keyboards are not supported by Telegram for media groups.
+    /// </summary>
+    Task SendMediaGroupAsync(long chatId, IReadOnlyList<(string Url, string? HtmlCaption)> items, CancellationToken ct = default);
 }
 
 public class TelegramBotClientSender : ITelegramSender
@@ -50,6 +56,33 @@ public class TelegramBotClientSender : ITelegramSender
             caption: htmlCaption,
             parseMode: ParseMode.Html,
             replyMarkup: replyMarkup,
+            cancellationToken: ct
+        );
+    }
+
+    public async Task SendMediaGroupAsync(long chatId, IReadOnlyList<(string Url, string? HtmlCaption)> items, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+
+        if (items.Count < 1 || items.Count > 10)
+        {
+            throw new ArgumentOutOfRangeException(nameof(items), "Telegram allows 1–10 media per group.");
+        }
+
+        var media = new List<IAlbumInputMedia>(items.Count);
+        for (int i = 0; i < items.Count; i++)
+        {
+            var (url, caption) = items[i];
+            media.Add(new InputMediaPhoto(new InputFileUrl(url))
+            {
+                Caption = i == 0 ? caption : null, // one caption per group (the first photo)
+                ParseMode = i == 0 ? ParseMode.Html : default
+            });
+        }
+
+        await _botClient.SendMediaGroup(
+            chatId,
+            media,
             cancellationToken: ct
         );
     }

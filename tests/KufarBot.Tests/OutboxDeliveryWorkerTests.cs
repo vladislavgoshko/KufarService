@@ -361,4 +361,112 @@ public class OutboxDeliveryWorkerTests
         mockSender.Verify(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
         mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task ProcessOutboxBatch_AlbumPayload_SendsMediaGroupAndFollowUpText()
+    {
+        await using var dbContext = CreateInMemoryDbContext();
+
+        long userId = 777;
+        dbContext.Users.Add(new UserEntity { Id = userId, CreatedAtUtc = DateTime.UtcNow });
+
+        var payload = new OutboxPayload
+        {
+            AdId = 3,
+            Title = "Album Ad",
+            PriceFormatted = "75 BYN",
+            Location = "Minsk",
+            AdLink = "http://link3",
+            ImageUrl = "https://rms.kufar.by/v1/list_thumbs_2x/c/1.jpg",
+            AllImageUrls =
+            {
+                "https://rms.kufar.by/v1/list_thumbs_2x/c/1.jpg",
+                "https://rms.kufar.by/v1/list_thumbs_2x/c/2.jpg",
+                "https://rms.kufar.by/v1/list_thumbs_2x/c/3.jpg"
+            },
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        dbContext.NotificationOutbox.Add(MakePhotoOutboxItem(userId, payload));
+        await dbContext.SaveChangesAsync();
+
+        var mockSender = new Mock<ITelegramSender>();
+        IReadOnlyList<(string Url, string? HtmlCaption)>? captured = null;
+        mockSender
+            .Setup(s => s.SendMediaGroupAsync(userId, It.IsAny<IReadOnlyList<(string Url, string? HtmlCaption)>>(), It.IsAny<CancellationToken>()))
+            .Callback<long, IReadOnlyList<(string, string?)>, CancellationToken>((_, items, _) => captured = items)
+            .Returns(Task.CompletedTask);
+        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(dbContext);
+        services.AddSingleton(mockSender.Object);
+
+        var worker = new OutboxDeliveryWorker(services.BuildServiceProvider(), NullLogger<OutboxDeliveryWorker>.Instance);
+
+        await worker.ProcessOutboxBatchAsync(CancellationToken.None);
+
+        var item = await dbContext.NotificationOutbox.FirstAsync();
+        Assert.Equal(2, item.Status); // Sent
+
+        // album: caption on the first photo, zero photo-per-item sends
+        Assert.NotNull(captured);
+        Assert.Equal(3, captured!.Count);
+        Assert.NotEmpty(captured[0].HtmlCaption!);
+        Assert.Null(captured[1].HtmlCaption);
+
+        mockSender.Verify(s => s.SendPhotoAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Never);
+        // follow-up text carries the ⭐ button (media groups cannot have inline keyboards)
+        mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ProcessOutboxBatch_AlbumSendFails_FallsBackToSingleDeviceSends()
+    {
+        await using var dbContext = CreateInMemoryDbContext();
+
+        long userId = 888;
+        dbContext.Users.Add(new UserEntity { Id = userId, CreatedAtUtc = DateTime.UtcNow });
+
+        var payload = new OutboxPayload
+        {
+            AdId = 4,
+            Title = "Album Fallback",
+            PriceFormatted = "60 BYN",
+            Location = "Minsk",
+            AdLink = "http://link4",
+            ImageUrl = "https://rms.kufar.by/v1/list_thumbs_2x/d/1.jpg",
+            AllImageUrls =
+            {
+                "https://rms.kufar.by/v1/list_thumbs_2x/d/1.jpg",
+                "https://rms.kufar.by/v1/list_thumbs_2x/d/2.jpg"
+            },
+            CreatedAtUtc = DateTime.UtcNow
+        };
+
+        dbContext.NotificationOutbox.Add(MakePhotoOutboxItem(userId, payload));
+        await dbContext.SaveChangesAsync();
+
+        var mockSender = new Mock<ITelegramSender>();
+        mockSender.Setup(s => s.SendMediaGroupAsync(It.IsAny<long>(), It.IsAny<IReadOnlyList<(string Url, string? HtmlCaption)>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ApiRequestException("media group failed", 400));
+        mockSender.Setup(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(dbContext);
+        services.AddSingleton(mockSender.Object);
+
+        var worker = new OutboxDeliveryWorker(services.BuildServiceProvider(), NullLogger<OutboxDeliveryWorker>.Instance);
+
+        var processed = await worker.ProcessOutboxBatchAsync(CancellationToken.None);
+
+        Assert.Equal(1, processed);
+        var item = await dbContext.NotificationOutbox.FirstAsync();
+        Assert.Equal(2, item.Status); // delivered as a single photo, not lost
+
+        mockSender.Verify(s => s.SendPhotoAsync(userId, payload.ImageUrl!, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockSender.Verify(s => s.SendTextMessageAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

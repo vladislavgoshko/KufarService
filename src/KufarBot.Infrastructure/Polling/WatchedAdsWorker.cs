@@ -168,6 +168,7 @@ public class WatchedAdsWorker : BackgroundService
                         Location = details.Location,
                         AdLink = details.AdLink,
                         ImageUrl = details.ImageUrl,
+                        AllImageUrls = new List<string>(details.AllImageUrls),
                         CreatedAtUtc = DateTime.UtcNow
                     }, ct);
                 }
