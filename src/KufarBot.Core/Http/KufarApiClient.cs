@@ -51,6 +51,23 @@ public class KufarApiClient : IKufarApiClient
         return new KufarSearchResult(normalizedAds, nextCursor, total);
     }
 
+    public async Task<Advertisement?> GetAdDetailsAsync(long adId, CancellationToken ct = default)
+    {
+        string url = $"https://api.kufar.by/search-api/v2/item/{adId}/rendered?lang=ru";
+        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
+
+        if ((int)response.StatusCode == 404)
+        {
+            return null; // removed ad
+        }
+
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(ct);
+        var dto = await JsonSerializer.DeserializeAsync<KufarItemRenderedResponseDto>(stream, JsonOptions, ct);
+        return dto?.Result == null ? null : KufarAdNormalizer.Normalize(dto.Result);
+    }
+
     public async Task<IReadOnlyList<KufarCategory>> GetCategoryTreeAsync(CancellationToken ct = default)
     {
         using var response = await _httpClient.GetAsync(KufarUrlBuilder.CategoryTreeUrl, HttpCompletionOption.ResponseHeadersRead, ct);

@@ -38,9 +38,40 @@ public static class BotKeyboards
             },
             new[]
             {
+                InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav")
+            },
+            new[]
+            {
                 InlineKeyboardButton.WithCallbackData("ℹ️ О боте", "menu_about")
             }
         });
+    }
+
+    /// <summary>eph-8b: favorites list — unfav buttons per ad + main menu row.</summary>
+    public static InlineKeyboardMarkup FavoritesMenu(List<WatchedAdEntity> favorites)
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+        foreach (var fav in favorites)
+        {
+            string title = fav.Title;
+            if (title.Length > 40)
+            {
+                title = title.Substring(0, 39) + "…";
+            }
+
+            string price = fav.LastPriceByn.HasValue ? $" — {fav.LastPriceByn.Value:0.##} BYN" : "";
+            rows.Add(new[]
+            {
+                InlineKeyboardButton.WithUrl($"⭐ {title}{price}", string.IsNullOrWhiteSpace(fav.AdLink) ? $"https://www.kufar.by/item/{fav.AdId}" : fav.AdLink)
+            });
+            rows.Add(new[]
+            {
+                InlineKeyboardButton.WithCallbackData("➖ Убрать из избранного", $"unfav_{fav.AdId}")
+            });
+        }
+
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") });
+        return new InlineKeyboardMarkup(rows);
     }
 
     public static InlineKeyboardMarkup SearchDraftMenu(UserSearchDraft draft)

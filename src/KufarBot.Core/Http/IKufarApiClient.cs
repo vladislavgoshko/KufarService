@@ -15,6 +15,13 @@ public record KufarSearchResult(
 public interface IKufarApiClient
 {
     Task<KufarSearchResult> SearchAsync(KufarSearchCriteria criteria, CancellationToken ct = default);
+
+    /// <summary>
+    /// Details of one ad via search-api/v2/item/{id}/rendered (price, title, images, parameters).
+    /// Returns null when the ad does not exist anymore (HTTP 404).
+    /// </summary>
+    Task<Advertisement?> GetAdDetailsAsync(long adId, CancellationToken ct = default);
+
     Task<IReadOnlyList<KufarCategory>> GetCategoryTreeAsync(CancellationToken ct = default);
     /// <summary>
     /// Filter parameters for one subcategory. The dispatch must be requested for the whole

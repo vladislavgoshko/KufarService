@@ -59,6 +59,28 @@ public class DeliveredAdEntity
     public DateTime DeliveredAtUtc { get; set; }
 }
 
+/// <summary>
+/// An ad the user added to favorites (⭐). A worker re-checks it periodically:
+/// a price drop triggers an outbox notification, disappearance is reported once.
+/// </summary>
+public class WatchedAdEntity
+{
+    public long Id { get; set; }
+    public long UserId { get; set; }
+    public UserEntity User { get; set; } = null!;
+
+    public long AdId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string AdLink { get; set; } = string.Empty;
+    public string? ImageUrl { get; set; }
+    public string? Location { get; set; }
+
+    public decimal? LastPriceByn { get; set; }
+    public DateTime LastCheckedUtc { get; set; }
+    public bool NotifiedMissing { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+}
+
 public class NotificationOutboxEntity
 {
     public long Id { get; set; }

@@ -5,18 +5,19 @@ using System.Threading.Tasks;
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace KufarBot.Infrastructure.TelegramClient; // Changed to avoid namespace conflict with Telegram.Bot
 
 public interface ITelegramSender
 {
-    Task SendTextMessageAsync(long chatId, string htmlMessage, CancellationToken ct = default);
+    Task SendTextMessageAsync(long chatId, string htmlMessage, InlineKeyboardMarkup? replyMarkup = null, CancellationToken ct = default);
 
     /// <summary>
     /// Sends a photo with an HTML caption. Throws the original exception when Telegram
     /// cannot deliver the photo (e.g. bad URL) — the caller must decide on fallback.
     /// </summary>
-    Task SendPhotoAsync(long chatId, string photoUrl, string htmlCaption, CancellationToken ct = default);
+    Task SendPhotoAsync(long chatId, string photoUrl, string htmlCaption, InlineKeyboardMarkup? replyMarkup = null, CancellationToken ct = default);
 }
 
 public class TelegramBotClientSender : ITelegramSender
@@ -28,17 +29,18 @@ public class TelegramBotClientSender : ITelegramSender
         _botClient = botClient ?? throw new ArgumentNullException(nameof(botClient));
     }
 
-    public async Task SendTextMessageAsync(long chatId, string htmlMessage, CancellationToken ct = default)
+    public async Task SendTextMessageAsync(long chatId, string htmlMessage, InlineKeyboardMarkup? replyMarkup = null, CancellationToken ct = default)
     {
         await _botClient.SendMessage(
             chatId: chatId,
             text: htmlMessage,
             parseMode: ParseMode.Html,
+            replyMarkup: replyMarkup,
             cancellationToken: ct
         );
     }
 
-    public async Task SendPhotoAsync(long chatId, string photoUrl, string htmlCaption, CancellationToken ct = default)
+    public async Task SendPhotoAsync(long chatId, string photoUrl, string htmlCaption, InlineKeyboardMarkup? replyMarkup = null, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(photoUrl);
 
@@ -47,6 +49,7 @@ public class TelegramBotClientSender : ITelegramSender
             photo: new InputFileUrl(photoUrl),
             caption: htmlCaption,
             parseMode: ParseMode.Html,
+            replyMarkup: replyMarkup,
             cancellationToken: ct
         );
     }

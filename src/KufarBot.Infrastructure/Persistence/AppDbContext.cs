@@ -9,6 +9,7 @@ public class AppDbContext : DbContext
     public DbSet<PollingFeedEntity> PollingFeeds => Set<PollingFeedEntity>();
     public DbSet<DeliveredAdEntity> DeliveredAds => Set<DeliveredAdEntity>();
     public DbSet<NotificationOutboxEntity> NotificationOutbox => Set<NotificationOutboxEntity>();
+    public DbSet<WatchedAdEntity> WatchedAds => Set<WatchedAdEntity>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -55,6 +56,17 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => new { e.Status, e.NextAttemptAtUtc });
             entity.HasOne(e => e.User)
                   .WithMany(u => u.OutboxItems)
+                  .HasForeignKey(e => e.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<WatchedAdEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.UserId, e.AdId }).IsUnique();
+            entity.HasIndex(e => e.LastCheckedUtc);
+            entity.HasOne(e => e.User)
+                  .WithMany()
                   .HasForeignKey(e => e.UserId)
                   .OnDelete(DeleteBehavior.Cascade);
         });

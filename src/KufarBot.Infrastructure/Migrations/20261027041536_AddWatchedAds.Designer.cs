@@ -11,8 +11,8 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace KufarBot.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20261027040339_AddUrlFiltersToPollingFeeds")]
-    partial class AddUrlFiltersToPollingFeeds
+    [Migration("20261027041536_AddWatchedAds")]
+    partial class AddWatchedAds
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -125,8 +125,7 @@ namespace KufarBot.Infrastructure.Migrations
 
                     b.Property<string>("UrlFiltersJson")
                         .IsRequired()
-                        .HasColumnType("TEXT")
-                        .HasDefaultValue("{}");
+                        .HasColumnType("TEXT");
 
                     b.HasKey("Id");
 
@@ -206,6 +205,54 @@ namespace KufarBot.Infrastructure.Migrations
                     b.ToTable("UserSearches");
                 });
 
+            modelBuilder.Entity("KufarBot.Infrastructure.Persistence.WatchedAdEntity", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("AdId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AdLink")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ImageUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastCheckedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("LastPriceByn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Location")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("NotifiedMissing")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UserId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LastCheckedUtc");
+
+                    b.HasIndex("UserId", "AdId")
+                        .IsUnique();
+
+                    b.ToTable("WatchedAds");
+                });
+
             modelBuilder.Entity("KufarBot.Infrastructure.Persistence.DeliveredAdEntity", b =>
                 {
                     b.HasOne("KufarBot.Infrastructure.Persistence.UserEntity", "User")
@@ -232,6 +279,17 @@ namespace KufarBot.Infrastructure.Migrations
                 {
                     b.HasOne("KufarBot.Infrastructure.Persistence.UserEntity", "User")
                         .WithMany("Searches")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("KufarBot.Infrastructure.Persistence.WatchedAdEntity", b =>
+                {
+                    b.HasOne("KufarBot.Infrastructure.Persistence.UserEntity", "User")
+                        .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

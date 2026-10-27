@@ -86,7 +86,8 @@ public class BotEngine : BackgroundService
             }
             else if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
             {
-                await HandleCallbackQueryAsync(botClient, dbContext, subscriptionService, categoryService, update.CallbackQuery, ct);
+                var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
+                await HandleCallbackQueryAsync(botClient, dbContext, subscriptionService, categoryService, kufarClient, update.CallbackQuery, ct);
             }
         }
         catch (Exception ex)
@@ -236,6 +237,7 @@ public class BotEngine : BackgroundService
         AppDbContext dbContext,
         ISearchSubscriptionService subscriptionService,
         ICategoryService categoryService,
+        IKufarApiClient kufarClient,
         CallbackQuery callback,
         CancellationToken ct)
     {
@@ -269,6 +271,105 @@ public class BotEngine : BackgroundService
                 "• Не создает дубликатов",
                 new InlineKeyboardMarkup(new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }),
                 ct);
+            return;
+        }
+
+        // ===================== Favorites (eph-8b) =====================
+        if (data == "menu_fav")
+        {
+            var favorites = await dbContext.WatchedAds
+                .Where(w => w.UserId == userId)
+                .OrderByDescending(w => w.CreatedAtUtc)
+                .ToListAsync(ct);
+
+            string text = favorites.Count == 0
+                ? "⭐ <b>Избранное</b>\n\nПока пусто. Добавляйте объявления кнопкой «⭐ В избранное» под новыми объявлениями — бот будет следить за ценой и исчезновением."
+                : $"⭐ <b>Избранное</b> — {favorites.Count} объявл.\n\nОтслеживается снижение цены и удаление с Kufar.";
+            await EditOrSendMessageAsync(botClient, chatId, messageId, text, BotKeyboards.FavoritesMenu(favorites), ct);
+            return;
+        }
+
+        if (data.StartsWith("fav_") && long.TryParse(data.Substring(4), out long favAdId))
+        {
+            var existing = await dbContext.WatchedAds
+                .FirstOrDefaultAsync(w => w.UserId == userId && w.AdId == favAdId, ct);
+
+            if (existing != null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    $"⭐ <b>Уже в избранном</b>\n\n{System.Net.WebUtility.HtmlEncode(existing.Title)}\n" +
+                    (existing.LastPriceByn.HasValue ? $"💰 {existing.LastPriceByn.Value:0.##} BYN\n" : "") +
+                    $"\nСледим за ценой и наличием.",
+                    new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav") },
+                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
+                    }),
+                    ct);
+                return;
+            }
+
+            Advertisement? details = await kufarClient.GetAdDetailsAsync(favAdId, ct);
+            if (details == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "❌ Объявление недоступно на Kufar — добавить в избранное нельзя.",
+                    new InlineKeyboardMarkup(new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }),
+                    ct);
+                return;
+            }
+
+            dbContext.WatchedAds.Add(new WatchedAdEntity
+            {
+                UserId = userId,
+                AdId = favAdId,
+                Title = details.Title,
+                AdLink = details.AdLink,
+                ImageUrl = details.ImageUrl,
+                Location = details.Location,
+                LastPriceByn = details.PriceByn,
+                LastCheckedUtc = DateTime.UtcNow,
+                NotifiedMissing = false,
+                CreatedAtUtc = DateTime.UtcNow
+            });
+            await dbContext.SaveChangesAsync(ct);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"✅ <b>Добавлено в избранное!</b>\n\n" +
+                $"<b>{System.Net.WebUtility.HtmlEncode(details.Title)}</b>\n" +
+                $"💰 {System.Net.WebUtility.HtmlEncode(details.FormattedPrice)}\n" +
+                $"📍 {System.Net.WebUtility.HtmlEncode(details.Location)}\n\n" +
+                "Следим за ценой и наличием — сообщим об изменениях.",
+                new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithUrl("📖 Открыть объявление", details.AdLink) },
+                    new[] { InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav") },
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
+                }),
+                ct);
+            return;
+        }
+
+        if (data.StartsWith("unfav_") && long.TryParse(data.Substring(6), out long unfavAdId))
+        {
+            var removed = await dbContext.WatchedAds
+                .Where(w => w.UserId == userId && w.AdId == unfavAdId)
+                .ExecuteDeleteAsync(ct);
+
+            if (removed > 0)
+            {
+                _logger.LogInformation("[BotEngine] Unfavorited ad AdId={AdId} for User={UserId}", unfavAdId, userId);
+            }
+
+            var favorites = await dbContext.WatchedAds
+                .Where(w => w.UserId == userId)
+                .OrderByDescending(w => w.CreatedAtUtc)
+                .ToListAsync(ct);
+
+            string text = favorites.Count == 0
+                ? "⭐ <b>Избранное</b>\n\nПусто — всё убрано."
+                : $"⭐ <b>Избранное</b> — {favorites.Count} объявл.";
+            await EditOrSendMessageAsync(botClient, chatId, messageId, text, BotKeyboards.FavoritesMenu(favorites), ct);
             return;
         }
 

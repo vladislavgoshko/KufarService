@@ -310,6 +310,7 @@ public class FeedPollingWorker : BackgroundService
                     var payload = new OutboxPayload
                     {
                         AdId = ad.Id,
+                        Kind = OutboxPayload.KindNewAd,
                         Title = ad.Title,
                         PriceFormatted = ad.FormattedPrice,
                         Location = ad.Location,
@@ -356,11 +357,19 @@ public class FeedPollingWorker : BackgroundService
 
 public class OutboxPayload
 {
+    public const string KindNewAd = "new_ad";
+    public const string KindPriceDrop = "fav_price_drop";
+    public const string KindAdMissing = "fav_missing";
+
     public long AdId { get; set; }
+    /// <summary>Message template: new_ad (notification with the ⭐ button), fav_price_drop, fav_missing.</summary>
+    public string Kind { get; set; } = KindNewAd;
     public string Title { get; set; } = string.Empty;
     public string PriceFormatted { get; set; } = string.Empty;
     public string Location { get; set; } = string.Empty;
     public string AdLink { get; set; } = string.Empty;
     public string? ImageUrl { get; set; }
     public DateTime CreatedAtUtc { get; set; }
+    /// <summary>Price shown in price-drop notifications ("was X").</summary>
+    public string? OldPriceFormatted { get; set; }
 }

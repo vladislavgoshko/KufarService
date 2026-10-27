@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.ReplyMarkups;
 using Xunit;
 
 namespace KufarBot.Tests;
@@ -64,7 +65,7 @@ public class OutboxDeliveryWorkerTests
         await dbContext.SaveChangesAsync();
 
         var mockSender = new Mock<ITelegramSender>();
-        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var services = new ServiceCollection();
@@ -82,7 +83,7 @@ public class OutboxDeliveryWorkerTests
         Assert.NotNull(item.SentAtUtc);
         Assert.Null(item.LockedUntilUtc);
 
-        mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -111,7 +112,7 @@ public class OutboxDeliveryWorkerTests
         await dbContext.SaveChangesAsync();
 
         var mockSender = new Mock<ITelegramSender>();
-        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ApiRequestException("Timeout", 500));
 
         var services = new ServiceCollection();
@@ -154,7 +155,7 @@ public class OutboxDeliveryWorkerTests
         await dbContext.SaveChangesAsync();
 
         var mockSender = new Mock<ITelegramSender>();
-        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ApiRequestException("Forbidden: bot was blocked by the user", 403));
 
         var services = new ServiceCollection();
@@ -200,7 +201,7 @@ public class OutboxDeliveryWorkerTests
 
         var mockSender = new Mock<ITelegramSender>();
         var responseParams = new ResponseParameters { RetryAfter = 45 };
-        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ApiRequestException("Too Many Requests", 429, responseParams));
 
         var services = new ServiceCollection();
@@ -258,7 +259,7 @@ public class OutboxDeliveryWorkerTests
         var item = await dbContext.NotificationOutbox.FirstAsync();
         Assert.Equal(2, item.Status); // Ultimately sent successfully
         Assert.Null(item.LockedUntilUtc);
-        mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     private static NotificationOutboxEntity MakePhotoOutboxItem(long userId, OutboxPayload payload)
@@ -300,7 +301,7 @@ public class OutboxDeliveryWorkerTests
         await dbContext.SaveChangesAsync();
 
         var mockSender = new Mock<ITelegramSender>();
-        mockSender.Setup(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        mockSender.Setup(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var services = new ServiceCollection();
@@ -314,8 +315,8 @@ public class OutboxDeliveryWorkerTests
         var item = await dbContext.NotificationOutbox.FirstAsync();
         Assert.Equal(2, item.Status); // Sent
 
-        mockSender.Verify(s => s.SendPhotoAsync(userId, payload.ImageUrl!, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
-        mockSender.Verify(s => s.SendTextMessageAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        mockSender.Verify(s => s.SendPhotoAsync(userId, payload.ImageUrl!, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockSender.Verify(s => s.SendTextMessageAsync(It.IsAny<long>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -341,9 +342,9 @@ public class OutboxDeliveryWorkerTests
         await dbContext.SaveChangesAsync();
 
         var mockSender = new Mock<ITelegramSender>();
-        mockSender.Setup(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        mockSender.Setup(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ApiRequestException("Wrong file identifier/HTTP URL specified", 400));
-        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        mockSender.Setup(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var services = new ServiceCollection();
@@ -357,7 +358,7 @@ public class OutboxDeliveryWorkerTests
         var item = await dbContext.NotificationOutbox.FirstAsync();
         Assert.Equal(2, item.Status); // Delivered as text, not lost and not retried as failure
 
-        mockSender.Verify(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
-        mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockSender.Verify(s => s.SendPhotoAsync(userId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockSender.Verify(s => s.SendTextMessageAsync(userId, It.IsAny<string>(), It.IsAny<InlineKeyboardMarkup>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 }

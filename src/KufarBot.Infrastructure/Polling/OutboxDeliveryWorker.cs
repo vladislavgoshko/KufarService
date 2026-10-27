@@ -12,6 +12,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Telegram.Bot.Exceptions;
+using Telegram.Bot.Types;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace KufarBot.Infrastructure.Polling;
 
@@ -180,7 +182,7 @@ public class OutboxDeliveryWorker : BackgroundService
         {
             await ApplyRateLimitsAsync(item.UserId, ct);
 
-            await SendAdMessageAsync(telegramSender, item.UserId, payload, messageText, ct);
+            await SendAdMessageAsync(telegramSender, item.UserId, payload, messageText, BuildReplyMarkup(payload), ct);
 
             item.Status = 2; // Sent
             item.SentAtUtc = DateTime.UtcNow;
@@ -246,19 +248,20 @@ public class OutboxDeliveryWorker : BackgroundService
         long userId,
         OutboxPayload payload,
         string htmlMessage,
+        InlineKeyboardMarkup? replyMarkup,
         CancellationToken ct)
     {
         var photoUrl = payload.ImageUrl;
 
         if (string.IsNullOrWhiteSpace(photoUrl))
         {
-            await telegramSender.SendTextMessageAsync(userId, htmlMessage, ct);
+            await telegramSender.SendTextMessageAsync(userId, htmlMessage, replyMarkup, ct);
             return;
         }
 
         try
         {
-            await telegramSender.SendPhotoAsync(userId, photoUrl, htmlMessage, ct);
+            await telegramSender.SendPhotoAsync(userId, photoUrl, htmlMessage, replyMarkup, ct);
         }
         catch (ApiRequestException photoEx)
         {
@@ -266,7 +269,7 @@ public class OutboxDeliveryWorker : BackgroundService
                 photoEx,
                 "[OutboxDeliveryWorker] Photo send failed (code {Code}) for UserId={UserId}, falling back to text.",
                 photoEx.ErrorCode, userId);
-            await telegramSender.SendTextMessageAsync(userId, htmlMessage, ct);
+            await telegramSender.SendTextMessageAsync(userId, htmlMessage, replyMarkup, ct);
         }
         catch (HttpRequestException photoEx)
         {
@@ -274,8 +277,22 @@ public class OutboxDeliveryWorker : BackgroundService
                 photoEx,
                 "[OutboxDeliveryWorker] Photo network error for UserId={UserId}, falling back to text.",
                 userId);
-            await telegramSender.SendTextMessageAsync(userId, htmlMessage, ct);
+            await telegramSender.SendTextMessageAsync(userId, htmlMessage, replyMarkup, ct);
         }
+    }
+
+    /// <summary>New-ad notifications carry the ⭐ button; favorites events do not need it.</summary>
+    private InlineKeyboardMarkup? BuildReplyMarkup(OutboxPayload payload)
+    {
+        if (payload.Kind != OutboxPayload.KindNewAd)
+        {
+            return null;
+        }
+
+        return new InlineKeyboardMarkup(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("⭐ В избранное", $"fav_{payload.AdId}")
+        });
     }
 
     private string FormatHtmlMessage(OutboxPayload payload)
@@ -285,12 +302,32 @@ public class OutboxDeliveryWorker : BackgroundService
         var location = System.Net.WebUtility.HtmlEncode(payload.Location);
         var link = payload.AdLink;
 
-        return $"✨ <b>Новое объявление!</b>\n\n" +
-               $"<b>{title}</b>\n" +
-               $"💰 Цена: {price}\n" +
-               $"📍 Место: {location}\n" +
-               $"⏰ Дата: {payload.CreatedAtUtc:dd.MM.yyyy HH:mm} UTC\n\n" +
-               $"<a href=\"{link}\">Открыть объявление →</a>";
+        switch (payload.Kind)
+        {
+            case OutboxPayload.KindPriceDrop:
+            {
+                var oldPrice = System.Net.WebUtility.HtmlEncode(payload.OldPriceFormatted ?? string.Empty);
+                return $"📉 <b>Цена снизилась!</b>\n\n" +
+                       $"<b>{title}</b>\n" +
+                       $"💰 Цена: <b>{price}</b>" +
+                       (string.IsNullOrEmpty(oldPrice) ? "" : $" (было: {oldPrice})") +
+                       $"\n📍 Место: {location}\n\n" +
+                       $"<a href=\"{link}\">Открыть объявление →</a>";
+            }
+
+            case OutboxPayload.KindAdMissing:
+                return $"🗑 <b>Объявление больше доступно не будет.</b>\n\n" +
+                       $"<b>{title}</b>\n" +
+                       $"<a href=\"{link}\">Проверить объявление →</a> (удалено с Kufar)";
+
+            default:
+                return $"✨ <b>Новое объявление!</b>\n\n" +
+                       $"<b>{title}</b>\n" +
+                       $"💰 Цена: {price}\n" +
+                       $"📍 Место: {location}\n" +
+                       $"⏰ Дата: {payload.CreatedAtUtc:dd.MM.yyyy HH:mm} UTC\n\n" +
+                       $"<a href=\"{link}\">Открыть объявление →</a>";
+        }
     }
 
     private async Task HandleTransientFailureAsync(AppDbContext dbContext, NotificationOutboxEntity item, string error, CancellationToken ct)
