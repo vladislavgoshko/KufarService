@@ -19,6 +19,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Console SDK does not copy appsettings.json to output by default; Host builder
+         reads it from the content root, so make it available next to the exe. -->
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\KufarBot.Core\KufarBot.Core.csproj" />
     <ProjectReference Include="..\KufarBot.Infrastructure\KufarBot.Infrastructure.csproj" />
   </ItemGroup>

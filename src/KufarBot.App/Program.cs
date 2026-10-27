@@ -18,7 +18,13 @@ public class Program
 {
     public static async Task Main(string[] args)
     {
-        var builder = Host.CreateApplicationBuilder(args);
+        // Anchor the content root next to the exe so appsettings.json is always
+        // found, regardless of the working directory the app is launched from.
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+        {
+            Args = args,
+            ContentRootPath = AppContext.BaseDirectory,
+        });
 
         // Database configuration
         var dbPath = builder.Configuration["DatabasePath"];
