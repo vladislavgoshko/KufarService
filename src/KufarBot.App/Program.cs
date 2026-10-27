@@ -58,12 +58,16 @@ public class Program
             builder.Configuration.GetSection(OutboxDeliveryOptions.SectionName));
         builder.Services.Configure<WatchedAdsOptions>(
             builder.Configuration.GetSection(WatchedAdsOptions.SectionName));
+        builder.Services.Configure<AdminOptions>(
+            builder.Configuration.GetSection(AdminOptions.SectionName));
         builder.Services.AddSingleton<FeedPollingOptions>(sp =>
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<FeedPollingOptions>>().Value);
         builder.Services.AddSingleton<OutboxDeliveryOptions>(sp =>
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<OutboxDeliveryOptions>>().Value);
         builder.Services.AddSingleton<WatchedAdsOptions>(sp =>
             sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<WatchedAdsOptions>>().Value);
+        builder.Services.AddSingleton<AdminOptions>(sp =>
+            sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<AdminOptions>>().Value);
 
         // Background Workers
         builder.Services.AddHostedService<FeedPollingWorker>();

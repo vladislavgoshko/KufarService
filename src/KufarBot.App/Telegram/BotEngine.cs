@@ -29,17 +29,20 @@ public class BotEngine : BackgroundService
     private readonly ITelegramBotClient _botClient;
     private readonly UserSessionStore _sessionStore;
     private readonly ILogger<BotEngine> _logger;
+    private readonly AdminOptions _adminOptions;
 
     public BotEngine(
         IServiceProvider serviceProvider,
         ITelegramBotClient botClient,
         UserSessionStore sessionStore,
-        ILogger<BotEngine> logger)
+        ILogger<BotEngine> logger,
+        AdminOptions? adminOptions = null)
     {
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _botClient = botClient ?? throw new ArgumentNullException(nameof(botClient));
         _sessionStore = sessionStore ?? throw new ArgumentNullException(nameof(sessionStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _adminOptions = adminOptions ?? new AdminOptions();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -235,6 +238,22 @@ public class BotEngine : BackgroundService
                 replyMarkup: BotKeyboards.MainMenu(),
                 cancellationToken: ct
             );
+            return;
+        }
+
+        // eph-12: admin-only service dashboard
+        if (text.StartsWith("/status", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_adminOptions.IsAdmin(message.From.Id))
+            {
+                await botClient.SendMessage(chatId: chatId,
+                    "⛔ Команда доступна только администратору.", cancellationToken: ct);
+                return;
+            }
+
+            string report = await BuildStatusReportAsync(dbContext, ct);
+            await botClient.SendMessage(chatId: chatId,
+                text: report, parseMode: ParseMode.Html, cancellationToken: ct);
             return;
         }
 
@@ -1608,6 +1627,55 @@ public class BotEngine : BackgroundService
 
         int days = (int)age.TotalDays;
         return days == 1 ? "1 дн назад" : $"{days} дн назад";
+    }
+
+    /// <summary>eph-12: compact service dashboard for the /status admin command.</summary>
+    private async Task<string> BuildStatusReportAsync(AppDbContext dbContext, CancellationToken ct)
+    {
+        DateTime nowUtc = DateTime.UtcNow;
+
+        int userCount = await dbContext.Users.CountAsync(ct);
+        int searchCount = await dbContext.UserSearches.CountAsync(ct);
+        int activeSearchCount = await dbContext.UserSearches.CountAsync(s => !s.IsPaused, ct);
+
+        var feeds = await dbContext.PollingFeeds.AsNoTracking().ToListAsync(ct);
+        var errorFeeds = feeds.Where(f => f.ConsecutiveErrors > 0)
+            .OrderByDescending(f => f.ConsecutiveErrors)
+            .ToList();
+        int staleFeeds = feeds.Count(f =>
+            f.LastPolledAtUtc == null ||
+            f.LastPolledAtUtc.Value < nowUtc - TimeSpan.FromMinutes(15));
+
+        int outboxPending = await dbContext.NotificationOutbox.CountAsync(n => n.Status == 0 || n.Status == 3, ct);
+        int outboxSending = await dbContext.NotificationOutbox.CountAsync(n => n.Status == 1, ct);
+        int outboxSentToday = await dbContext.NotificationOutbox.CountAsync(
+            n => n.Status == 2 && n.SentAtUtc >= nowUtc - TimeSpan.FromHours(24), ct);
+        int outboxDead = await dbContext.NotificationOutbox.CountAsync(n => n.Status == 4, ct);
+
+        int deliveredToday = await dbContext.DeliveredAds.CountAsync(
+            d => d.DeliveredAtUtc >= nowUtc - TimeSpan.FromHours(24), ct);
+        int watchedCount = await dbContext.WatchedAds.CountAsync(ct);
+
+        var lines = new List<string>
+        {
+            "📊 <b>Статус бота</b>",
+            "",
+            $"👥 Пользователей: <b>{userCount}</b>",
+            $"🔍 Подписок: <b>{searchCount}</b> (активных: {activeSearchCount})",
+            $"📡 Фидов: <b>{feeds.Count}</b> (устаревших: {staleFeeds}, с ошибками: {errorFeeds.Count})",
+            $"📦 Очередь уведомлений: в ожидании <b>{outboxPending}</b>, в отправке {outboxSending}, доставлено за 24ч: {outboxSentToday}, dead-letter: {outboxDead}",
+            $"📬 Доставок за 24ч: <b>{deliveredToday}</b>",
+            $"⭐ Объявлений в избранном: <b>{watchedCount}</b>"
+        };
+
+        foreach (var feed in errorFeeds.Take(3))
+        {
+            lines.Add($"  ⚠️ фид #{feed.Id} (подк. {feed.SubcategoryId}, город {feed.CityId?.ToString() ?? "—"}): {feed.ConsecutiveErrors} ошибок подряд");
+        }
+
+        lines.Add("");
+        lines.Add($"🕐 Проверено (UTC): {nowUtc:yyyy-MM-dd HH:mm:ss}");
+        return string.Join("\n", lines);
     }
 
     private async Task HandleFilterTextInputAsync(
