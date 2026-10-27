@@ -107,6 +107,9 @@ namespace KufarBot.Infrastructure.Migrations
                     b.Property<int>("ConsecutiveErrors")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("LastErrorAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("LastPolledAtUtc")
                         .HasColumnType("TEXT");
 

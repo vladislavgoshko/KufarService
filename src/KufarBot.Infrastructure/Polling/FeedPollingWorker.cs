@@ -22,6 +22,11 @@ public class FeedPollingOptions
     public int RequestTimeoutSeconds { get; set; } = 30;
     public int MaxPagesPerPoll { get; set; } = 3;
     public int PageSize { get; set; } = 50;
+
+    /// <summary>eph-13: base delay for the anti-ban exponential backoff after consecutive errors.</summary>
+    public int BackoffBaseSeconds { get; set; } = 90;
+    /// <summary>eph-13: upper bound of the backoff delay.</summary>
+    public int BackoffMaxSeconds { get; set; } = 1800;
 }
 
 public class FeedPollingWorker : BackgroundService
@@ -111,6 +116,18 @@ public class FeedPollingWorker : BackgroundService
                 break;
             }
 
+            // eph-13: anti-ban exponential backoff — skip a feed that recently
+            // failed until its backoff window (base * 2^(n-1) with jitter) has elapsed.
+            if (feed.ConsecutiveErrors > 0 && feed.LastErrorAtUtc.HasValue)
+            {
+                TimeSpan delay = ComputeBackoffDelay(
+                    feed.ConsecutiveErrors, _options.BackoffBaseSeconds, _options.BackoffMaxSeconds, BackoffJitter.Value);
+                if (DateTime.UtcNow < feed.LastErrorAtUtc.Value + delay)
+                {
+                    continue;
+                }
+            }
+
             try
             {
                 await PollSingleFeedAsync(dbContext, kufarClient, feed, ct);
@@ -125,6 +142,7 @@ public class FeedPollingWorker : BackgroundService
                     feed.Id, feed.SubcategoryId, feed.CityId);
 
                 feed.ConsecutiveErrors++;
+                feed.LastErrorAtUtc = DateTime.UtcNow;
                 try
                 {
                     await dbContext.SaveChangesAsync(CancellationToken.None);
@@ -135,6 +153,21 @@ public class FeedPollingWorker : BackgroundService
                 }
             }
         }
+    }
+
+    private static readonly ThreadLocal<Random> BackoffJitter = new(() => new Random());
+
+    /// <summary>
+    /// eph-13: backoff window for n consecutive failures — base * 2^(n-1), capped at maxSeconds,
+    /// multiplied by a ±20% jitter (so parallel feeds do not retry in lockstep).
+    /// </summary>
+    public static TimeSpan ComputeBackoffDelay(int consecutiveErrors, int baseSeconds, int maxSeconds, Random? jitter = null)
+    {
+        int n = Math.Max(1, consecutiveErrors);
+        double exponent = Math.Min(n - 1, 30); // guard against overflow for absurd counters
+        double raw = Math.Min(baseSeconds * Math.Pow(2, exponent), maxSeconds);
+        double factor = jitter == null ? 1.0 : 0.8 + jitter.NextDouble() * 0.4;
+        return TimeSpan.FromSeconds(raw * factor);
     }
 
     public async Task PollSingleFeedAsync(AppDbContext dbContext, IKufarApiClient kufarClient, PollingFeedEntity feed, CancellationToken ct)

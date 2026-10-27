@@ -50,6 +50,8 @@ public class PollingFeedEntity
     public DateTime LastSeenAdTimeUtc { get; set; }
     public string LastSeenAdIdsJson { get; set; } = "[]"; // JSON array of long IDs
     public int ConsecutiveErrors { get; set; } = 0;
+    /// <summary>eph-13: UTC time of the last failed poll — reference point for the exponential backoff skip.</summary>
+    public DateTime? LastErrorAtUtc { get; set; }
 }
 
 public class DeliveredAdEntity
