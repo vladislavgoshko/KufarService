@@ -39,6 +39,11 @@ public sealed record SavedFilter
 {
     public required SavedFilterKind Kind { get; init; }
     public required string Key { get; init; }
+    /// <summary>
+    /// Kufar search-API query parameter name (dispatch <c>url_name</c>, e.g. "cnd" for "condition").
+    /// Server filters without it stay client-side only (saved rows from older versions).
+    /// </summary>
+    public string? UrlName { get; init; }
     public required string Title { get; init; }
     public IReadOnlyList<string> Values { get; init; } = Array.Empty<string>();
     public decimal? Min { get; init; }

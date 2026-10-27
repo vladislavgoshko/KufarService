@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using KufarBot.Core.Filters;
 using KufarBot.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -87,7 +88,7 @@ public class SearchSubscriptionService : ISearchSubscriptionService
                 await _dbContext.SaveChangesAsync(ct);
             }
 
-            await EnsurePollingFeedExistsAsync(subcategoryId, cityId, ct);
+            await EnsurePollingFeedExistsAsync(subcategoryId, cityId, UrlFiltersJsonOf(existing), ct);
             return existing;
         }
 
@@ -110,8 +111,8 @@ public class SearchSubscriptionService : ISearchSubscriptionService
 
         _dbContext.UserSearches.Add(search);
 
-        // 3. Ensure corresponding PollingFeed exists
-        await EnsurePollingFeedExistsAsync(subcategoryId, cityId, ct);
+        // 3. Ensure corresponding PollingFeed exists (identity includes the URL filter set)
+        await EnsurePollingFeedExistsAsync(subcategoryId, cityId, UrlFiltersJsonOf(search), ct);
 
         await _dbContext.SaveChangesAsync(ct);
         _logger.LogInformation("[SearchSubscriptionService] Created search Id={SearchId} for User={UserId}", search.Id, userId);
@@ -127,25 +128,35 @@ public class SearchSubscriptionService : ISearchSubscriptionService
             return false;
         }
 
+        string oldFeedJson = UrlFiltersJsonOf(search);
+
         search.FiltersJson = string.IsNullOrWhiteSpace(filtersJson) ? "[]" : filtersJson;
         search.UpdatedAtUtc = DateTime.UtcNow;
+
+        string newFeedJson = UrlFiltersJsonOf(search);
+        await EnsurePollingFeedExistsAsync(search.SubcategoryId, search.CityId, newFeedJson, ct);
         await _dbContext.SaveChangesAsync(ct);
+
+        // The filter set defines the feed identity — release the old feed if nothing else uses it
+        await CleanupOrphanedFeedsIfAnyAsync(search.SubcategoryId, search.CityId, oldFeedJson, ct);
         _logger.LogInformation("[SearchSubscriptionService] Updated filters for search Id={SearchId}, User={UserId}", searchId, userId);
         return true;
     }
 
-    private async Task EnsurePollingFeedExistsAsync(int subcategoryId, int? cityId, CancellationToken ct)
+    private async Task EnsurePollingFeedExistsAsync(int subcategoryId, int? cityId, string urlFiltersJson, CancellationToken ct)
     {
         bool feedExists = await _dbContext.PollingFeeds
-            .AnyAsync(f => f.SubcategoryId == subcategoryId && f.CityId == cityId, ct);
+            .AnyAsync(f => f.SubcategoryId == subcategoryId && f.CityId == cityId && f.UrlFiltersJson == urlFiltersJson, ct);
 
         if (!feedExists)
         {
-            _logger.LogInformation("[SearchSubscriptionService] Creating PollingFeed for Subcategory={Subcategory}, City={City}", subcategoryId, cityId);
+            _logger.LogInformation("[SearchSubscriptionService] Creating PollingFeed for Subcategory={Subcategory}, City={City}, UrlFilters={UrlFilters}",
+                subcategoryId, cityId, urlFiltersJson);
             _dbContext.PollingFeeds.Add(new PollingFeedEntity
             {
                 SubcategoryId = subcategoryId,
                 CityId = cityId,
+                UrlFiltersJson = urlFiltersJson,
                 LastSeenAdTimeUtc = DateTime.UtcNow,
                 LastSeenAdIdsJson = "[]",
                 ConsecutiveErrors = 0
@@ -177,13 +188,14 @@ public class SearchSubscriptionService : ISearchSubscriptionService
             return false;
         }
 
+        string feedJson = UrlFiltersJsonOf(search);
         search.IsPaused = isPaused;
         search.UpdatedAtUtc = DateTime.UtcNow;
 
         // Note: PollingFeed remains alive because feeds can be shared by multiple users/searches,
         // and FeedPollingWorker queries dbContext.UserSearches where !IsPaused during ad delivery.
         // If no active searches exist across the whole DB for that feed, clean up can be evaluated.
-        await CleanupOrphanedFeedsIfAnyAsync(search.SubcategoryId, search.CityId, ct);
+        await CleanupOrphanedFeedsIfAnyAsync(search.SubcategoryId, search.CityId, feedJson, ct);
 
         await _dbContext.SaveChangesAsync(ct);
         _logger.LogInformation("[SearchSubscriptionService] Search Id={SearchId} pause status set to {IsPaused}", searchId, isPaused);
@@ -202,6 +214,7 @@ public class SearchSubscriptionService : ISearchSubscriptionService
 
         int subcategoryId = search.SubcategoryId;
         int? cityId = search.CityId;
+        string feedJson = UrlFiltersJsonOf(search);
 
         // Pending outbox notifications for this search:
         // Cancel pending notifications that haven't been sent yet so deleted search doesn't spam user
@@ -218,30 +231,44 @@ public class SearchSubscriptionService : ISearchSubscriptionService
         _dbContext.UserSearches.Remove(search);
         await _dbContext.SaveChangesAsync(ct);
 
-        // Check if any other ACTIVE OR PAUSED searches still reference this PollingFeed
-        await CleanupOrphanedFeedsIfAnyAsync(subcategoryId, cityId, ct);
+        // Check if any other searches (any filter set) still use a feed of this (subcat, city)
+        await CleanupOrphanedFeedsIfAnyAsync(subcategoryId, cityId, feedJson, ct);
 
         _logger.LogInformation("[SearchSubscriptionService] Deleted search Id={SearchId} for User={UserId}", searchId, userId);
         return true;
     }
 
-    private async Task CleanupOrphanedFeedsIfAnyAsync(int subcategoryId, int? cityId, CancellationToken ct)
+    private async Task CleanupOrphanedFeedsIfAnyAsync(int subcategoryId, int? cityId, string urlFiltersJson, CancellationToken ct)
     {
-        bool otherSearchesExist = await _dbContext.UserSearches
-            .AnyAsync(s => s.SubcategoryId == subcategoryId && s.CityId == cityId, ct);
+        // Searches tracking the same feed (subcat + city + identical URL filter set).
+        // Note: the deleted/edited search itself is not in the list anymore, so no exclusion is needed.
+        var searchesInCity = await _dbContext.UserSearches
+            .Where(s => s.SubcategoryId == subcategoryId && s.CityId == cityId)
+            .ToListAsync(ct);
 
-        if (!otherSearchesExist)
+        bool feedStillNeeded = searchesInCity
+            .Any(s => string.Equals(UrlFiltersJsonOf(s), urlFiltersJson, StringComparison.Ordinal));
+
+        if (!feedStillNeeded)
         {
             var orphanedFeed = await _dbContext.PollingFeeds
-                .FirstOrDefaultAsync(f => f.SubcategoryId == subcategoryId && f.CityId == cityId, ct);
+                .FirstOrDefaultAsync(f => f.SubcategoryId == subcategoryId &&
+                                          f.CityId == cityId &&
+                                          f.UrlFiltersJson == urlFiltersJson, ct);
 
             if (orphanedFeed != null)
             {
-                _logger.LogInformation("[SearchSubscriptionService] Removing orphaned PollingFeed Id={FeedId} (Subcategory={Subcategory}, City={City})",
-                    orphanedFeed.Id, subcategoryId, cityId);
+                _logger.LogInformation("[SearchSubscriptionService] Removing orphaned PollingFeed Id={FeedId} (Subcategory={Subcategory}, City={City}, UrlFilters={UrlFilters})",
+                    orphanedFeed.Id, subcategoryId, cityId, urlFiltersJson);
                 _dbContext.PollingFeeds.Remove(orphanedFeed);
                 await _dbContext.SaveChangesAsync(ct);
             }
         }
+    }
+
+    /// <summary>Canonical URL-filter identity of a search's saved filters ("{}" when none).</summary>
+    internal static string UrlFiltersJsonOf(UserSearchEntity search)
+    {
+        return UrlFiltersBuilder.CanonicalJson(UrlFiltersBuilder.Build(SavedFilter.Deserialize(search.FiltersJson)));
     }
 }

@@ -1186,6 +1186,7 @@ public class BotEngine : BackgroundService
                 {
                     Kind = SavedFilterKind.Bool,
                     Key = spec.Key,
+                    UrlName = spec.UrlName,
                     Title = spec.Title,
                     Values = new[] { option.Value }
                 });
@@ -1208,6 +1209,7 @@ public class BotEngine : BackgroundService
                 {
                     Kind = SavedFilterKind.Single,
                     Key = spec.Key,
+                    UrlName = spec.UrlName,
                     Title = spec.Title,
                     Values = new[] { option.Value }
                 });
@@ -1259,6 +1261,7 @@ public class BotEngine : BackgroundService
         {
             Kind = SavedFilterKind.Multi,
             Key = spec.Key,
+            UrlName = spec.UrlName,
             Title = spec.Title,
             Values = values
         });
@@ -1417,6 +1420,7 @@ public class BotEngine : BackgroundService
             {
                 Kind = SavedFilterKind.Range,
                 Key = spec.Key,
+                UrlName = spec.UrlName,
                 Title = spec.Title,
                 Min = parsed.Min,
                 Max = parsed.Max
@@ -1442,6 +1446,7 @@ public class BotEngine : BackgroundService
             {
                 Kind = SavedFilterKind.Text,
                 Key = spec.Key,
+                UrlName = spec.UrlName,
                 Title = spec.Title,
                 Values = new[] { parsed.TextValue! }
             });

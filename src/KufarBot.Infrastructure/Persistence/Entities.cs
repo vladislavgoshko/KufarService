@@ -41,6 +41,8 @@ public class PollingFeedEntity
     public int Id { get; set; }
     public int SubcategoryId { get; set; }
     public int? CityId { get; set; } // null = All Belarus
+    /// <summary>Canonical JSON of the URL filter dictionary (KufarBot.Core.Filters.UrlFiltersBuilder.CanonicalJson). "{}" = no URL filters.</summary>
+    public string UrlFiltersJson { get; set; } = "{}";
     public DateTime? LastPolledAtUtc { get; set; }
     public DateTime LastSeenAdTimeUtc { get; set; }
     public string LastSeenAdIdsJson { get; set; } = "[]"; // JSON array of long IDs

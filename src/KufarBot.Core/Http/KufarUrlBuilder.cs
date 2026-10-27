@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using KufarBot.Core.Models;
 
 namespace KufarBot.Core.Http;
@@ -40,6 +41,14 @@ public static class KufarUrlBuilder
         if (!string.IsNullOrWhiteSpace(criteria.Query))
         {
             queryParams.Add($"query={Uri.EscapeDataString(criteria.Query)}");
+        }
+
+        if (criteria.UrlFilters != null)
+        {
+            foreach (var pair in criteria.UrlFilters.OrderBy(p => p.Key, StringComparer.Ordinal))
+            {
+                queryParams.Add($"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value)}");
+            }
         }
 
         if (criteria.MinPriceByn.HasValue || criteria.MaxPriceByn.HasValue)

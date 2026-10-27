@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using KufarBot.Core.Filters;
 using KufarBot.Core.Http;
 using KufarBot.Core.Models;
 using KufarBot.Infrastructure.Persistence;
@@ -17,7 +18,7 @@ public class FeedPollingOptions
 {
     public const string SectionName = "Polling";
 
-    public int PollingIntervalSeconds { get; set; } = 45;
+    public int PollingIntervalSeconds { get; set; } = 60;
     public int RequestTimeoutSeconds { get; set; } = 30;
     public int MaxPagesPerPoll { get; set; } = 3;
     public int PageSize { get; set; } = 50;
@@ -143,12 +144,16 @@ public class FeedPollingWorker : BackgroundService
         int pagesFetched = 0;
         string? nextCursor = null;
 
+        var feedUrlFilters = UrlFiltersBuilder.Parse(feed.UrlFiltersJson);
+        bool usedUrlFilters = feedUrlFilters.Count > 0;
+
         while (pagesFetched < _options.MaxPagesPerPoll)
         {
             var criteria = new KufarSearchCriteria
             {
                 CategoryId = feed.SubcategoryId,
                 AreaId = feed.CityId,
+                UrlFilters = usedUrlFilters ? feedUrlFilters : null,
                 Size = _options.PageSize,
                 Cursor = cursor,
                 Sort = "lst.d",
@@ -163,6 +168,17 @@ public class FeedPollingWorker : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "[FeedPollingWorker] HTTP search failed for feed Id={FeedId}, Subcategory={Subcategory}", feed.Id, feed.SubcategoryId);
+
+                // Unknown/invalid URL filter names make Kufar reject the whole request (422).
+                // Fall back to the bare feed once per poll — saved filters are still applied
+                // client-side (search.Matches), so correctness is preserved.
+                if (usedUrlFilters && cursor == null)
+                {
+                    usedUrlFilters = false;
+                    _logger.LogInformation("[FeedPollingWorker] Retrying feed Id={FeedId} without URL filters (client-side matching).", feed.Id);
+                    continue;
+                }
+
                 throw;
             }
 
@@ -220,16 +236,24 @@ public class FeedPollingWorker : BackgroundService
             .ToList();
 
         // A search must be served by exactly *its* corresponding feed:
-        //   feed (subcat, city=X)  -> searches with a concrete CityId == X
-        //   feed (subcat, null)    -> searches with CityId == null ("All Belarus")
+        //   feed (subcat, city=X, filters=F)   -> searches (subcat, city=X, URL filters == F)
+        //   feed (subcat, null, filters=F)     -> searches with CityId == null ("All Belarus")
         // Attaching city searches to the "all Belarus" feed would notify users about
         // ads from other cities (the client-side price matching cannot tell them apart).
-        var activeSearches = await dbContext.UserSearches
+        var searchesForCity = await dbContext.UserSearches
             .Where(s => !s.IsPaused &&
                         s.SubcategoryId == feed.SubcategoryId &&
                         ((feed.CityId == null && s.CityId == null) ||
                          (feed.CityId != null && s.CityId == feed.CityId)))
             .ToListAsync(ct);
+
+        string feedUrlFiltersJson = UrlFiltersBuilder.CanonicalJson(feedUrlFilters);
+        var activeSearches = searchesForCity
+            .Where(s => string.Equals(
+                UrlFiltersBuilder.CanonicalJson(UrlFiltersBuilder.Build(SavedFilter.Deserialize(s.FiltersJson))),
+                feedUrlFiltersJson,
+                StringComparison.Ordinal))
+            .ToList();
 
         // Bulk-load already-delivered (UserId, AdId) pairs to avoid per-pair AnyAsync queries (N+1).
         var newAdIds = newAds.Select(a => a.Id).ToList();

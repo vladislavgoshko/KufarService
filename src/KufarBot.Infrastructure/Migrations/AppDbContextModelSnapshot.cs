@@ -120,6 +120,11 @@ namespace KufarBot.Infrastructure.Migrations
                     b.Property<int>("SubcategoryId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("UrlFiltersJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("{}");
+
                     b.HasKey("Id");
 
                     b.HasIndex("SubcategoryId", "CityId")
