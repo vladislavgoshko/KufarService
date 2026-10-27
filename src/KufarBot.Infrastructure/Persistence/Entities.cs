@@ -11,6 +11,9 @@ public class UserEntity
     public DateTime CreatedAtUtc { get; set; }
     public bool IsActive { get; set; } = true;
 
+    /// <summary>eph-10: serialized search draft (search-wizard state) — survives bot restarts.</summary>
+    public string? DraftJson { get; set; }
+
     public ICollection<UserSearchEntity> Searches { get; set; } = new List<UserSearchEntity>();
     public ICollection<DeliveredAdEntity> DeliveredAds { get; set; } = new List<DeliveredAdEntity>();
     public ICollection<NotificationOutboxEntity> OutboxItems { get; set; } = new List<NotificationOutboxEntity>();

@@ -82,17 +82,76 @@ public class BotEngine : BackgroundService
 
             if (update.Type == UpdateType.Message && update.Message != null)
             {
+                long telegramUserId = update.Message.From?.Id ?? 0;
+
+                // eph-10: restore the persisted draft so restarts don't lose wizard state
+                await LoadDraftFromDbAsync(dbContext, telegramUserId, ct);
                 await HandleMessageAsync(botClient, dbContext, subscriptionService, categoryService, update.Message, ct);
+                await SaveDraftToDbAsync(dbContext, telegramUserId, ct);
             }
             else if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
             {
+                long telegramUserId = update.CallbackQuery.From?.Id ?? 0;
                 var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
+
+                await LoadDraftFromDbAsync(dbContext, telegramUserId, ct);
                 await HandleCallbackQueryAsync(botClient, dbContext, subscriptionService, categoryService, kufarClient, update.CallbackQuery, ct);
+                await SaveDraftToDbAsync(dbContext, telegramUserId, ct);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "[BotEngine] Error handling update {UpdateId}", update.Id);
+        }
+    }
+
+    /// <summary>Loads the persisted draft into the session store when it is not in memory (eph-10).</summary>
+    private async Task LoadDraftFromDbAsync(AppDbContext dbContext, long userId, CancellationToken ct)
+    {
+        if (userId == 0 || _sessionStore.GetDraft(userId) != null)
+        {
+            return;
+        }
+
+        try
+        {
+            var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            var draft = DraftPersistence.Deserialize(user?.DraftJson);
+            if (draft != null)
+            {
+                _sessionStore.SetDraft(userId, draft);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[BotEngine] Draft restore failed for User={UserId}", userId);
+        }
+    }
+
+    /// <summary>Persists (or clears, after a reset) the user's draft after each interaction (eph-10).</summary>
+    private async Task SaveDraftToDbAsync(AppDbContext dbContext, long userId, CancellationToken ct)
+    {
+        if (userId == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            string? json = DraftPersistence.Serialize(_sessionStore.GetDraft(userId));
+
+            var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            if (user == null || user.DraftJson == json)
+            {
+                return;
+            }
+
+            user.DraftJson = json;
+            await dbContext.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[BotEngine] Draft save failed for User={UserId}", userId);
         }
     }
 
