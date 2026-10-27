@@ -24,6 +24,17 @@ public interface ISearchSubscriptionService
         CancellationToken ct = default);
 
     Task<bool> UpdateSearchFiltersAsync(int searchId, long userId, string filtersJson, CancellationToken ct = default);
+
+    /// <summary>eph-14: full edit of an existing subscription (city, price range, filters); the subcategory stays unchanged.</summary>
+    Task<bool> UpdateSearchCoreAsync(
+        int searchId,
+        long userId,
+        int? cityId,
+        string? cityName,
+        decimal? minPriceByn,
+        decimal? maxPriceByn,
+        string filtersJson,
+        CancellationToken ct = default);
     Task<IReadOnlyList<UserSearchEntity>> GetUserSearchesAsync(long userId, CancellationToken ct = default);
     Task<UserSearchEntity?> GetSearchByIdAsync(int searchId, long userId, CancellationToken ct = default);
     Task<bool> TogglePauseAsync(int searchId, long userId, bool isPaused, CancellationToken ct = default);
@@ -140,6 +151,49 @@ public class SearchSubscriptionService : ISearchSubscriptionService
         // The filter set defines the feed identity — release the old feed if nothing else uses it
         await CleanupOrphanedFeedsIfAnyAsync(search.SubcategoryId, search.CityId, oldFeedJson, ct);
         _logger.LogInformation("[SearchSubscriptionService] Updated filters for search Id={SearchId}, User={UserId}", searchId, userId);
+        return true;
+    }
+
+    /// <summary>eph-14: city / price-range / filters edit; keeps SubcategoryId (feed's category part) unchanged.</summary>
+    public async Task<bool> UpdateSearchCoreAsync(
+        int searchId,
+        long userId,
+        int? cityId,
+        string? cityName,
+        decimal? minPriceByn,
+        decimal? maxPriceByn,
+        string filtersJson,
+        CancellationToken ct = default)
+    {
+        if (minPriceByn.HasValue && maxPriceByn.HasValue && minPriceByn.Value > maxPriceByn.Value)
+        {
+            throw new ArgumentException("Минимальная цена не может быть больше максимальной.");
+        }
+
+        var search = await GetSearchByIdAsync(searchId, userId, ct);
+        if (search == null)
+        {
+            return false;
+        }
+
+        int oldSubcategoryId = search.SubcategoryId;
+        int? oldCityId = search.CityId;
+        string oldFeedJson = UrlFiltersJsonOf(search);
+
+        search.CityId = cityId;
+        search.CityName = cityName;
+        search.MinPriceByn = minPriceByn;
+        search.MaxPriceByn = maxPriceByn;
+        search.FiltersJson = string.IsNullOrWhiteSpace(filtersJson) ? "[]" : filtersJson;
+        search.UpdatedAtUtc = DateTime.UtcNow;
+
+        // City is part of the feed identity — ensure the target feed and release the old one.
+        string newFeedJson = UrlFiltersJsonOf(search);
+        await EnsurePollingFeedExistsAsync(search.SubcategoryId, search.CityId, newFeedJson, ct);
+        await _dbContext.SaveChangesAsync(ct);
+
+        await CleanupOrphanedFeedsIfAnyAsync(oldSubcategoryId, oldCityId, oldFeedJson, ct);
+        _logger.LogInformation("[SearchSubscriptionService] Updated search Id={SearchId} (city={CityId}, User={UserId})", searchId, cityId, userId);
         return true;
     }
 

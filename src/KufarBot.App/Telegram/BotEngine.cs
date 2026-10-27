@@ -781,9 +781,11 @@ public class BotEngine : BackgroundService
 
             await EnsureFilterSpecsLoadedAsync(botClient, chatId, messageId, draft, ct);
 
+            // eph-14: full edit — the draft screen covers city, prices and filters
+            // («✅ Сохранить подписку» applies everything, the subcategory stays unchanged)
             await EditOrSendMessageAsync(botClient, chatId, messageId,
-                $"✏️ <b>Редактирование фильтров подписки #{search.Id}</b>\n\n{RenderFiltersMenuText(draft)}",
-                BotKeyboards.FiltersMenu(draft), ct);
+                $"✏️ <b>Редактирование подписки #{search.Id}</b>\n\n{FormatDraftSummary(draft)}",
+                BotKeyboards.SearchDraftMenu(draft), ct);
             return;
         }
 
@@ -948,17 +950,64 @@ public class BotEngine : BackgroundService
                 return;
             }
 
-            if (draft.EditingSearchId == null)
+            // eph-14: editing an existing subscription — apply city / price / filters,
+            // subcategory stays as-is (changing the category is not an "edit").
+            if (draft.EditingSearchId.HasValue)
             {
-                var existingSearches = await subscriptionService.GetUserSearchesAsync(userId, ct);
-                if (existingSearches.Count(s => !s.IsPaused) >= MaxActiveSubscriptions)
+                int editingId = draft.EditingSearchId.Value;
+                var current = await subscriptionService.GetSearchByIdAsync(editingId, userId, ct);
+                if (current == null)
                 {
+                    _sessionStore.ResetDraft(userId);
                     await EditOrSendMessageAsync(botClient, chatId, messageId,
-                        $"🚧 <b>Достигнут лимит активных подписок ({MaxActiveSubscriptions}).</b>\n\n" +
-                        "Приостановите или удалите существующие подписки в разделе «Мои подписки», чтобы создать новую.",
+                        "⚠️ Подписка не найдена или была удалена.", BotKeyboards.MainMenu(), ct);
+                    return;
+                }
+
+                if (draft.SubcategoryId != current.SubcategoryId)
+                {
+                    draft.SubcategoryId = current.SubcategoryId;
+                    draft.SubcategoryTitle = current.SubcategoryTitle;
+                    await EditOrSendMessageAsync(botClient, chatId, messageId,
+                        "⚠️ Категорию менять нельзя — создайте новую подписку.\n\nИзменены только город, цены и фильтры:",
                         BotKeyboards.SearchDraftMenu(draft), ct);
                     return;
                 }
+
+                bool ok = await subscriptionService.UpdateSearchCoreAsync(
+                    editingId,
+                    userId,
+                    draft.CityId,
+                    draft.CityName,
+                    draft.MinPriceByn,
+                    draft.MaxPriceByn,
+                    SavedFilter.Serialize(draft.Filters),
+                    ct);
+
+                _sessionStore.ResetDraft(userId);
+
+                if (ok)
+                {
+                    await EditOrSendMessageAsync(botClient, chatId, messageId,
+                        $"✅ <b>Подписка #{editingId} обновлена!</b>",
+                        new InlineKeyboardMarkup(new[] { InlineKeyboardButton.WithCallbackData("📋 К подписке", $"subview_{editingId}") }), ct);
+                }
+                else
+                {
+                    await EditOrSendMessageAsync(botClient, chatId, messageId,
+                        "⚠️ Не удалось обновить подписку.", BotKeyboards.MainMenu(), ct);
+                }
+                return;
+            }
+
+            var existingSearches = await subscriptionService.GetUserSearchesAsync(userId, ct);
+            if (existingSearches.Count(s => !s.IsPaused) >= MaxActiveSubscriptions)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    $"🚧 <b>Достигнут лимит активных подписок ({MaxActiveSubscriptions}).</b>\n\n" +
+                    "Приостановите или удалите существующие подписки в разделе «Мои подписки», чтобы создать новую.",
+                    BotKeyboards.SearchDraftMenu(draft), ct);
+                return;
             }
 
             var savedSearch = await subscriptionService.SaveSearchAsync(
@@ -1485,15 +1534,24 @@ public class BotEngine : BackgroundService
 
         if (draft.EditingSearchId.HasValue)
         {
-            string json = SavedFilter.Serialize(draft.Filters);
-            bool ok = await subscriptionService.UpdateSearchFiltersAsync(draft.EditingSearchId.Value, userId, json, ct);
+            // eph-14: apply everything (city / prices included) so wizard edits don't
+            // lose draft changes; keeps the old filters-only edit as a special case of it.
+            bool ok = await subscriptionService.UpdateSearchCoreAsync(
+                draft.EditingSearchId.Value,
+                userId,
+                draft.CityId,
+                draft.CityName,
+                draft.MinPriceByn,
+                draft.MaxPriceByn,
+                SavedFilter.Serialize(draft.Filters),
+                ct);
             _sessionStore.ResetDraft(userId);
 
             if (ok)
             {
                 await EditOrSendMessageAsync(botClient, chatId, messageId,
-                    $"✅ Фильтры подписки #{draft.EditingSearchId.Value} обновлены." +
-                    (json == "[]" ? "\n(фильтры сброшены — подписка без фильтров)" : ""),
+                    $"✅ Подписка #{draft.EditingSearchId.Value} обновлена." +
+                    (SavedFilter.Serialize(draft.Filters) == "[]" ? "\n(фильтры сброшены — подписка без фильтров)" : ""),
                     new InlineKeyboardMarkup(new[] { InlineKeyboardButton.WithCallbackData("📋 К подписке", $"subview_{draft.EditingSearchId.Value}") }), ct);
             }
             else
