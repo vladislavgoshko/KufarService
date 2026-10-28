@@ -5,6 +5,7 @@ using Telegram.Bot.Types.ReplyMarkups;
 using KufarBot.Core.Filters;
 using KufarBot.Core.Models;
 using KufarBot.Infrastructure.Persistence;
+using KufarBot.Infrastructure.Telegram;
 
 namespace KufarBot.App.Telegram;
 
@@ -33,7 +34,7 @@ public static class BotKeyboards
         {
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("🔍 Создать поиск", "menu_create"),
+                InlineKeyboardButton.WithCallbackData("🔍 Создать поиск", "menu_create").Primary(),
                 InlineKeyboardButton.WithCallbackData("📋 Мои подписки", "menu_list")
             },
             new[]
@@ -66,7 +67,7 @@ public static class BotKeyboards
             });
             rows.Add(new[]
             {
-                InlineKeyboardButton.WithCallbackData("➖ Убрать из избранного", $"unfav_{fav.AdId}")
+                InlineKeyboardButton.WithCallbackData("➖ Убрать из избранного", $"unfav_{fav.AdId}").Danger()
             });
         }
 
@@ -98,7 +99,7 @@ public static class BotKeyboards
 
         if (draft.MinPriceByn.HasValue || draft.MaxPriceByn.HasValue)
         {
-            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🔄 Сбросить цены", "draft_reset_prices") });
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🔄 Сбросить цены", "draft_reset_prices").Danger() });
         }
 
         if (draft.SubcategoryId.HasValue)
@@ -107,12 +108,12 @@ public static class BotKeyboards
             {
                 InlineKeyboardButton.WithCallbackData(
                     draft.Filters.Count > 0 ? $"🎛 Фильтры ({draft.Filters.Count})" : "🎛 Фильтры", "fmenu"),
-                InlineKeyboardButton.WithCallbackData("👁 Примеры", "fpreview")
+                InlineKeyboardButton.WithCallbackData("👁 Примеры", "fpreview").Primary()
             });
-            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✅ Сохранить подписку", "draft_save") });
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✅ Сохранить подписку", "draft_save").Success() });
         }
 
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("❌ Отмена", "menu_main") });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("❌ Отмена", "menu_main").Danger() });
 
         return new InlineKeyboardMarkup(rows);
     }
@@ -138,7 +139,7 @@ public static class BotKeyboards
         rows.Add(new[]
         {
             InlineKeyboardButton.WithCallbackData("⬅️ К категориям", "draft_choose_cat"),
-            InlineKeyboardButton.WithCallbackData("Отмена", "menu_draft")
+            InlineKeyboardButton.WithCallbackData("Отмена", "menu_draft").Danger()
         });
         return new InlineKeyboardMarkup(rows);
     }
@@ -220,7 +221,7 @@ public static class BotKeyboards
 
         rows.Add(new[]
         {
-            InlineKeyboardButton.WithCallbackData("➕ Создать поиск", "menu_create"),
+            InlineKeyboardButton.WithCallbackData("➕ Создать поиск", "menu_create").Primary(),
             InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "menu_main")
         });
 
@@ -231,17 +232,22 @@ public static class BotKeyboards
     {
         string toggleText = search.IsPaused ? "▶️ Возобновить" : "⏸️ Приостановить";
         string toggleAction = search.IsPaused ? $"resume_{search.Id}" : $"pause_{search.Id}";
+        var toggleButton = InlineKeyboardButton.WithCallbackData(toggleText, toggleAction);
+        if (search.IsPaused)
+        {
+            toggleButton.Success(); // resume is the positive action; pause stays neutral
+        }
 
         return new InlineKeyboardMarkup(new[]
         {
             new[]
             {
-                InlineKeyboardButton.WithCallbackData(toggleText, toggleAction),
+                toggleButton,
                 InlineKeyboardButton.WithCallbackData("✏️ Фильтры", $"fedit_{search.Id}")
             },
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("🗑️ Удалить", $"delconf_{search.Id}"),
+                InlineKeyboardButton.WithCallbackData("🗑️ Удалить", $"delconf_{search.Id}").Danger(),
                 InlineKeyboardButton.WithCallbackData("⬅️ К списку", "menu_list")
             }
         });
@@ -253,7 +259,7 @@ public static class BotKeyboards
         {
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("⚠️ Да, удалить", $"del_{searchId}"),
+                InlineKeyboardButton.WithCallbackData("⚠️ Да, удалить", $"del_{searchId}").Danger(),
                 InlineKeyboardButton.WithCallbackData("Отмена", $"subview_{searchId}")
             }
         });
@@ -291,7 +297,7 @@ public static class BotKeyboards
         }
 
         rows.Add(HasServerFilters(draft.Filters)
-            ? new[] { InlineKeyboardButton.WithCallbackData("🧹 Очистить всё", "fclrall"), InlineKeyboardButton.WithCallbackData("🎛 Свои фильтры", "fown") }
+            ? new[] { InlineKeyboardButton.WithCallbackData("🧹 Очистить всё", "fclrall").Danger(), InlineKeyboardButton.WithCallbackData("🎛 Свои фильтры", "fown") }
             : new[] { InlineKeyboardButton.WithCallbackData("🎛 Свои фильтры", "fown") });
 
         var nav = new List<InlineKeyboardButton>();
@@ -314,7 +320,7 @@ public static class BotKeyboards
 
         rows.Add(new[]
         {
-            InlineKeyboardButton.WithCallbackData("✔️ Готово", "fdone"),
+            InlineKeyboardButton.WithCallbackData("✔️ Готово", "fdone").Success(),
             InlineKeyboardButton.WithCallbackData("⬅️ К черновику", "menu_draft")
         });
 
@@ -383,12 +389,12 @@ public static class BotKeyboards
 
                 if (spec.Kind == FilterKind.Multi)
                 {
-                    rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✅ Подтвердить выбор", $"fmdone_{specIndex}") });
+                    rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✅ Подтвердить выбор", $"fmdone_{specIndex}").Success() });
                 }
 
                 if (chosen != null)
                 {
-                    rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🧹 Очистить фильтр", $"fclr_{specIndex}") });
+                    rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🧹 Очистить фильтр", $"fclr_{specIndex}").Danger() });
                 }
                 break;
 
@@ -396,14 +402,14 @@ public static class BotKeyboards
             case FilterKind.Text:
                 if (draft.Filters.Any(f => f.Key == spec.Key))
                 {
-                    rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🧹 Очистить фильтр", $"fclr_{specIndex}") });
+                    rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🧹 Очистить фильтр", $"fclr_{specIndex}").Danger() });
                 }
                 break;
         }
 
         rows.Add(new[]
         {
-            InlineKeyboardButton.WithCallbackData("✔️ Готово", "fdone"),
+            InlineKeyboardButton.WithCallbackData("✔️ Готово", "fdone").Success(),
             InlineKeyboardButton.WithCallbackData("⬅️ К списку фильтров", "fmenu")
         });
         return new InlineKeyboardMarkup(rows);
@@ -441,7 +447,7 @@ public static class BotKeyboards
             new[]
             {
                 InlineKeyboardButton.WithCallbackData("⬅️ К списку фильтров", "fmenu"),
-                InlineKeyboardButton.WithCallbackData("✔️ Готово", "fdone")
+                InlineKeyboardButton.WithCallbackData("✔️ Готово", "fdone").Success()
             }
         });
     }

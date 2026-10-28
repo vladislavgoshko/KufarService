@@ -8,6 +8,7 @@ using KufarBot.Core.Filters;
 using KufarBot.Core.Http;
 using KufarBot.Core.Models;
 using KufarBot.Infrastructure.Persistence;
+using KufarBot.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -509,7 +510,7 @@ public class BotEngine : BackgroundService
                     "⚠️ Не удалось загрузить параметры подкатегории с Kufar.\n\nПопробуйте ещё раз:",
                     new InlineKeyboardMarkup(new[]
                     {
-                        new[] { InlineKeyboardButton.WithCallbackData("🔄 Повторить", "fmenu") },
+                        new[] { InlineKeyboardButton.WithCallbackData("🔄 Повторить", "fmenu").Primary() },
                         new[] { InlineKeyboardButton.WithCallbackData("⬅️ К черновику", "menu_draft") }
                     }), ct);
                 return;
