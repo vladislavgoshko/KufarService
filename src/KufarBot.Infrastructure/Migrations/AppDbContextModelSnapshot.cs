@@ -135,6 +135,34 @@ namespace KufarBot.Infrastructure.Migrations
                     b.ToTable("PollingFeeds");
                 });
 
+            modelBuilder.Entity("KufarBot.Infrastructure.Persistence.UsageEventEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PropertiesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UserId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("EventType", "OccurredAtUtc");
+
+                    b.ToTable("UsageEvents");
+                });
+
             modelBuilder.Entity("KufarBot.Infrastructure.Persistence.UserEntity", b =>
                 {
                     b.Property<long>("Id")

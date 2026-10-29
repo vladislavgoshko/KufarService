@@ -5,12 +5,16 @@ using System.Net;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using KufarBot.Core.Analytics;
+using KufarBot.Infrastructure.Analytics;
 using KufarBot.Infrastructure.Persistence;
+using KufarBot.Infrastructure.Telegram;
 using KufarBot.Infrastructure.TelegramClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.ReplyMarkups;
@@ -93,6 +97,7 @@ public class OutboxDeliveryWorker : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var telegramSender = scope.ServiceProvider.GetRequiredService<ITelegramSender>();
+        var analytics = scope.ServiceProvider.GetService<IUsageAnalytics>();
 
         await RecoverExpiredLeasesAsync(dbContext, ct);
 
@@ -126,7 +131,7 @@ public class OutboxDeliveryWorker : BackgroundService
                 break;
             }
 
-            await ProcessSingleItemAsync(dbContext, telegramSender, item, ct);
+            await ProcessSingleItemAsync(dbContext, telegramSender, analytics, item, ct);
             sentCount++;
         }
 
@@ -155,9 +160,10 @@ public class OutboxDeliveryWorker : BackgroundService
     }
 
     private async Task ProcessSingleItemAsync(
-        AppDbContext dbContext, 
-        ITelegramSender telegramSender, 
-        NotificationOutboxEntity item, 
+        AppDbContext dbContext,
+        ITelegramSender telegramSender,
+        IUsageAnalytics? analytics,
+        NotificationOutboxEntity item,
         CancellationToken ct)
     {
         OutboxPayload? payload = null;
@@ -229,7 +235,16 @@ public class OutboxDeliveryWorker : BackgroundService
             _logger.LogError(ex, "[OutboxDeliveryWorker] Unexpected error sending OutboxId={OutboxId}", item.Id);
             await HandleTransientFailureAsync(dbContext, item, "Unexpected error: " + ex.Message, ct);
         }
-        
+
+        // eph-17: delivered-notification event; placed after the send outcome is
+        // settled so analytics failures can never affect delivery/retry logic.
+        if (item.Status == 2 && analytics != null)
+        {
+            await analytics.RecordAsync(item.UserId, UsageEventTypes.ListingNotificationSent,
+                new { kind = payload.Kind, target = $"ad:{item.AdId},search:{item.SearchId}" },
+                CancellationToken.None);
+        }
+
         if (!ct.IsCancellationRequested)
         {
             try
@@ -308,7 +323,7 @@ public class OutboxDeliveryWorker : BackgroundService
         }
     }
 
-    /// <summary>New-ad notifications carry the ⭐ button; favorites events do not need it.</summary>
+    /// <summary>eph-17: new-ad notifications carry the ⭐ / tracked-📖 buttons; favorites events too.</summary>
     private InlineKeyboardMarkup? BuildReplyMarkup(OutboxPayload payload)
     {
         if (payload.Kind != OutboxPayload.KindNewAd)
@@ -318,7 +333,8 @@ public class OutboxDeliveryWorker : BackgroundService
 
         return new InlineKeyboardMarkup(new[]
         {
-            InlineKeyboardButton.WithCallbackData("⭐ В избранное", $"fav_{payload.AdId}")
+            InlineKeyboardButton.WithCallbackData("⭐ В избранное", $"fav_{payload.AdId}"),
+            InlineKeyboardButton.WithCallbackData("📖 Открыть объявление", $"open_{payload.AdId}").Primary()
         });
     }
 

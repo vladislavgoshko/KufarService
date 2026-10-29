@@ -10,6 +10,7 @@ public class AppDbContext : DbContext
     public DbSet<DeliveredAdEntity> DeliveredAds => Set<DeliveredAdEntity>();
     public DbSet<NotificationOutboxEntity> NotificationOutbox => Set<NotificationOutboxEntity>();
     public DbSet<WatchedAdEntity> WatchedAds => Set<WatchedAdEntity>();
+    public DbSet<UsageEventEntity> UsageEvents => Set<UsageEventEntity>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -69,6 +70,13 @@ public class AppDbContext : DbContext
                   .WithMany()
                   .HasForeignKey(e => e.UserId)
                   .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UsageEventEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.EventType, e.OccurredAtUtc });
+            entity.HasIndex(e => e.UserId);
         });
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using KufarBot.App.Telegram;
 using KufarBot.Core.Http;
+using KufarBot.Infrastructure.Analytics;
 using KufarBot.Infrastructure.Persistence;
 using KufarBot.Infrastructure.Polling;
 using KufarBot.Infrastructure.TelegramClient;
@@ -56,6 +57,7 @@ public class Program
         builder.Services.AddSingleton<UserSessionStore>();
         builder.Services.AddSingleton<ICategoryService, CachedCategoryService>();
         builder.Services.AddScoped<ISearchSubscriptionService, SearchSubscriptionService>();
+        builder.Services.AddScoped<IUsageAnalytics, UsageAnalytics>();
 
         // Worker options from configuration (appsettings: sections "Polling" and "Outbox")
         builder.Services.Configure<FeedPollingOptions>(

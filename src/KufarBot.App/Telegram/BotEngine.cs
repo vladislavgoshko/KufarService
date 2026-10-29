@@ -5,8 +5,10 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using KufarBot.Core.Filters;
+using KufarBot.Core.Analytics;
 using KufarBot.Core.Http;
 using KufarBot.Core.Models;
+using KufarBot.Infrastructure.Analytics;
 using KufarBot.Infrastructure.Persistence;
 using KufarBot.Infrastructure.Telegram;
 using Microsoft.EntityFrameworkCore;
@@ -83,6 +85,7 @@ public class BotEngine : BackgroundService
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var subscriptionService = scope.ServiceProvider.GetRequiredService<ISearchSubscriptionService>();
             var categoryService = scope.ServiceProvider.GetRequiredService<ICategoryService>();
+            var analytics = scope.ServiceProvider.GetRequiredService<IUsageAnalytics>();
 
             if (update.Type == UpdateType.Message && update.Message != null)
             {
@@ -90,7 +93,7 @@ public class BotEngine : BackgroundService
 
                 // eph-10: restore the persisted draft so restarts don't lose wizard state
                 await LoadDraftFromDbAsync(dbContext, telegramUserId, ct);
-                await HandleMessageAsync(botClient, dbContext, subscriptionService, categoryService, update.Message, ct);
+                await HandleMessageAsync(botClient, dbContext, subscriptionService, categoryService, analytics, update.Message, ct);
                 await SaveDraftToDbAsync(dbContext, telegramUserId, ct);
             }
             else if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
@@ -99,7 +102,7 @@ public class BotEngine : BackgroundService
                 var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
 
                 await LoadDraftFromDbAsync(dbContext, telegramUserId, ct);
-                await HandleCallbackQueryAsync(botClient, dbContext, subscriptionService, categoryService, kufarClient, update.CallbackQuery, ct);
+                await HandleCallbackQueryAsync(botClient, dbContext, subscriptionService, categoryService, kufarClient, analytics, update.CallbackQuery, ct);
                 await SaveDraftToDbAsync(dbContext, telegramUserId, ct);
             }
         }
@@ -201,6 +204,7 @@ public class BotEngine : BackgroundService
         AppDbContext dbContext,
         ISearchSubscriptionService subscriptionService,
         ICategoryService categoryService,
+        IUsageAnalytics analytics,
         Message message,
         CancellationToken ct)
     {
@@ -217,6 +221,10 @@ public class BotEngine : BackgroundService
         if (text.Equals("/start", StringComparison.OrdinalIgnoreCase))
         {
             _sessionStore.ResetDraft(message.From.Id);
+
+            // eph-17: acquisition point for the bot-start -> first-search funnel
+            await analytics.RecordAsync(message.From.Id, UsageEventTypes.BotStarted, ct: ct);
+
             await botClient.SendMessage(
                 chatId: chatId,
                 text: "👋 <b>Добро пожаловать в Kufar Мониторинг!</b>\n\n" +
@@ -258,10 +266,27 @@ public class BotEngine : BackgroundService
             return;
         }
 
+        // eph-17: admin-only usage analytics
+        if (text.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!_adminOptions.IsAdmin(message.From.Id))
+            {
+                await botClient.SendMessage(chatId: chatId,
+                    "⛔ Команда доступна только администратору.", cancellationToken: ct);
+                return;
+            }
+
+            string stats = await BuildAdminStatsTextAsync(analytics, AnalyticsPeriod.Day, ct);
+            await botClient.SendMessage(chatId: chatId,
+                text: stats, parseMode: ParseMode.Html,
+                replyMarkup: BotKeyboards.AdminStatsMenu(AnalyticsPeriod.Day), cancellationToken: ct);
+            return;
+        }
+
         // Check if user is currently entering a filter value (own filters / range / text)
         if (draft != null && draft.AwaitingFilterInput.HasValue)
         {
-            await HandleFilterTextInputAsync(botClient, dbContext, chatId, message.From.Id, draft, text, ct);
+            await HandleFilterTextInputAsync(botClient, dbContext, analytics, chatId, message.From.Id, draft, text, ct);
             return;
         }
 
@@ -317,6 +342,7 @@ public class BotEngine : BackgroundService
         ISearchSubscriptionService subscriptionService,
         ICategoryService categoryService,
         IKufarApiClient kufarClient,
+        IUsageAnalytics analytics,
         CallbackQuery callback,
         CancellationToken ct)
     {
@@ -329,6 +355,58 @@ public class BotEngine : BackgroundService
         string data = callback.Data ?? string.Empty;
 
         await botClient.AnswerCallbackQuery(callback.Id, cancellationToken: ct);
+
+        // eph-17: admin analytics periods
+        if (data.StartsWith("admst_"))
+        {
+            if (!_adminOptions.IsAdmin(userId))
+            {
+                await botClient.SendMessage(chatId: chatId,
+                    "⛔ Команда доступна только администратору.", cancellationToken: ct);
+                return;
+            }
+
+            AnalyticsPeriod period = data switch
+            {
+                "admst_w" => AnalyticsPeriod.Week,
+                "admst_m" => AnalyticsPeriod.Month,
+                _ => AnalyticsPeriod.Day
+            };
+
+            string stats = await BuildAdminStatsTextAsync(analytics, period, ct);
+            await EditOrSendMessageAsync(botClient, chatId, messageId, stats, BotKeyboards.AdminStatsMenu(period), ct);
+            return;
+        }
+
+        // eph-17: tracked "open listing" proxy (click observable in Bot API — plain URL buttons are not)
+        if (data.StartsWith("open_") && long.TryParse(data.Substring(5), out long openAdId))
+        {
+            await analytics.RecordAsync(userId, UsageEventTypes.ListingLinkClicked,
+                new { target = $"ad:{openAdId}" }, ct);
+
+            // Prefer the real Kufar link stored by favorites tracking.
+            string adLink = $"https://www.kufar.by/item/{openAdId}";
+            string title = $"Объявление #{openAdId}";
+            var watched = await dbContext.WatchedAds
+                .FirstOrDefaultAsync(w => w.UserId == userId && w.AdId == openAdId, ct);
+            if (watched != null)
+            {
+                if (!string.IsNullOrWhiteSpace(watched.AdLink)) adLink = watched.AdLink;
+                if (!string.IsNullOrWhiteSpace(watched.Title)) title = watched.Title;
+            }
+
+            await botClient.SendMessage(
+                chatId: chatId,
+                text: $"📖 <b>{System.Net.WebUtility.HtmlEncode(title)}</b>",
+                parseMode: ParseMode.Html,
+                replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithUrl("Открыть на Kufar", adLink).Primary() },
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "menu_main") }
+                }),
+                cancellationToken: ct);
+            return;
+        }
 
         // Navigation: Main Menu
         if (data == "menu_main")
@@ -413,6 +491,8 @@ public class BotEngine : BackgroundService
             });
             await dbContext.SaveChangesAsync(ct);
 
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.Favorite, $"ad:{favAdId}", ct);
+
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 $"✅ <b>Добавлено в избранное!</b>\n\n" +
                 $"<b>{System.Net.WebUtility.HtmlEncode(details.Title)}</b>\n" +
@@ -421,7 +501,7 @@ public class BotEngine : BackgroundService
                 "Следим за ценой и наличием — сообщим об изменениях.",
                 new InlineKeyboardMarkup(new[]
                 {
-                    new[] { InlineKeyboardButton.WithUrl("📖 Открыть объявление", details.AdLink) },
+                    new[] { InlineKeyboardButton.WithCallbackData("📖 Открыть объявление", $"open_{favAdId}").Primary() },
                     new[] { InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav") },
                     new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
                 }),
@@ -487,6 +567,10 @@ public class BotEngine : BackgroundService
             }
 
             await SendDraftPreviewAsync(botClient, chatId, messageId, kufarClient, draft, ct);
+
+            // eph-17: preview is a distinct feature worth measuring
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.Preview,
+                draft.SubcategoryId.HasValue ? $"sub:{draft.SubcategoryId.Value}" : null, ct);
             return;
         }
 
@@ -595,7 +679,7 @@ public class BotEngine : BackgroundService
             var parts = data.Split('_');
             if (parts.Length == 3 && int.TryParse(parts[1], out int singleSpecIndex) && int.TryParse(parts[2], out int optionIndex))
             {
-                await HandleSingleOptionChoiceAsync(botClient, chatId, messageId, userId, singleSpecIndex, optionIndex, ct);
+                await HandleSingleOptionChoiceAsync(botClient, chatId, messageId, userId, analytics, singleSpecIndex, optionIndex, ct);
             }
             return;
         }
@@ -606,7 +690,7 @@ public class BotEngine : BackgroundService
             var parts = data.Split('_');
             if (parts.Length == 3 && int.TryParse(parts[1], out int multiSpecIndex) && int.TryParse(parts[2], out int multiOptionIndex))
             {
-                await ToggleMultiOptionAsync(botClient, chatId, messageId, userId, multiSpecIndex, multiOptionIndex, ct);
+                await ToggleMultiOptionAsync(botClient, chatId, messageId, userId, analytics, multiSpecIndex, multiOptionIndex, ct);
             }
             return;
         }
@@ -722,6 +806,9 @@ public class BotEngine : BackgroundService
                 draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.SellerType, Key = "own_seller", Title = "Продавец", Values = new[] { "company" } });
             }
 
+            // eph-17: own-filter features (selecting "any" just resets — still a feature use)
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.OwnSellerType, data.TrimStart('f', 'o', 'w', 'n', '_'), ct);
+
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 "✅ Сохранено.\n\n🎛 <b>Свои фильтры</b>", BotKeyboards.OwnFiltersMenu(draft), ct);
             return;
@@ -747,6 +834,11 @@ public class BotEngine : BackgroundService
             {
                 draft.Filters.RemoveAll(f => f.Kind == SavedFilterKind.MaxAgeHours);
                 draft.Filters.Add(new SavedFilter { Kind = SavedFilterKind.MaxAgeHours, Key = "own_age", Title = "Возраст", Min = hours });
+            }
+
+            if (int.TryParse(data.Substring("fown_age_".Length), out int ageHours) && ageHours > 0)
+            {
+                await TryRecordFeatureAsync(analytics, userId, UsageFeatures.OwnMaxAge, $"{ageHours}h", ct);
             }
 
             await EditOrSendMessageAsync(botClient, chatId, messageId,
@@ -1004,6 +1096,10 @@ public class BotEngine : BackgroundService
             var existingSearches = await subscriptionService.GetUserSearchesAsync(userId, ct);
             if (existingSearches.Count(s => !s.IsPaused) >= MaxActiveSubscriptions)
             {
+                // eph-17: funnel-exit point — user hit the subscription cap
+                await analytics.RecordAsync(userId, UsageEventTypes.LimitReached,
+                    new { target = $"user:{userId}", limit = MaxActiveSubscriptions, active = existingSearches.Count(s => !s.IsPaused) }, ct);
+
                 await EditOrSendMessageAsync(botClient, chatId, messageId,
                     $"🚧 <b>Достигнут лимит активных подписок ({MaxActiveSubscriptions}).</b>\n\n" +
                     "Приостановите или удалите существующие подписки в разделе «Мои подписки», чтобы создать новую.",
@@ -1401,6 +1497,7 @@ public class BotEngine : BackgroundService
         long chatId,
         int messageId,
         long userId,
+        IUsageAnalytics analytics,
         int specIndex,
         int optionIndex,
         CancellationToken ct)
@@ -1435,6 +1532,9 @@ public class BotEngine : BackgroundService
                     Title = spec.Title,
                     Values = new[] { option.Value }
                 });
+
+                // eph-17: on-state selection counts as a preset use
+                await TryRecordPresetAsync(analytics, userId, spec, option.Value, ct);
             }
         }
         else // Single
@@ -1458,6 +1558,8 @@ public class BotEngine : BackgroundService
                     Title = spec.Title,
                     Values = new[] { option.Value }
                 });
+
+                await TryRecordPresetAsync(analytics, userId, spec, option.Value, ct);
             }
         }
 
@@ -1472,6 +1574,7 @@ public class BotEngine : BackgroundService
         long chatId,
         int messageId,
         long userId,
+        IUsageAnalytics analytics,
         int specIndex,
         int optionIndex,
         CancellationToken ct)
@@ -1492,7 +1595,8 @@ public class BotEngine : BackgroundService
         var chosen = BotKeyboards.FindForSpec(draft, spec);
         var values = chosen?.Values.ToList() ?? new List<string>();
 
-        if (values.Contains(option.Value, StringComparer.OrdinalIgnoreCase))
+        bool removed = values.Contains(option.Value, StringComparer.OrdinalIgnoreCase);
+        if (removed)
         {
             values.Remove(option.Value);
         }
@@ -1510,6 +1614,11 @@ public class BotEngine : BackgroundService
             Title = spec.Title,
             Values = values
         });
+
+        if (!removed)
+        {
+            await TryRecordPresetAsync(analytics, userId, spec, option.Value, ct);
+        }
 
         int updatedSpecIndex = await RefreshSpecsAndLocateAsync(draft, spec, specIndex, ct);
 
@@ -1688,6 +1797,77 @@ public class BotEngine : BackgroundService
         return days == 1 ? "1 дн назад" : $"{days} дн назад";
     }
 
+    // ===================== Usage analytics (eph-17) =====================
+
+    /// <summary>Records a FeatureUsed event; analytics failures must never break UI handling.</summary>
+    private async Task TryRecordFeatureAsync(
+        IUsageAnalytics analytics, long userId, string feature, string? target, CancellationToken ct)
+    {
+        try
+        {
+            await analytics.RecordAsync(userId, UsageEventTypes.FeatureUsed,
+                new { feature, target }, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[BotEngine] FeatureUsed analytics failed for User={UserId}", userId);
+        }
+    }
+
+    /// <summary>Records a PresetSelected event for a browser-site filter choice.</summary>
+    private async Task TryRecordPresetAsync(
+        IUsageAnalytics analytics, long userId, FilterSpec spec, string? value, CancellationToken ct)
+    {
+        try
+        {
+            string preset = $"{spec.Title} = {value}";
+            await analytics.RecordAsync(userId, UsageEventTypes.PresetSelected,
+                new { preset, target = spec.UrlName ?? spec.Key }, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[BotEngine] PresetSelected analytics failed for User={UserId}", userId);
+        }
+    }
+
+    /// <summary>eph-17: usage statistics report for the /admin command.</summary>
+    private async Task<string> BuildAdminStatsTextAsync(
+        IUsageAnalytics analytics, AnalyticsPeriod period, CancellationToken ct)
+    {
+        UsageReport r = await analytics.GetStatsAsync(period, ct);
+
+        string periodTitle = period switch
+        {
+            AnalyticsPeriod.Day => "сутки",
+            AnalyticsPeriod.Week => "неделя",
+            _ => "месяц"
+        };
+
+        string Escape(string s) => System.Net.WebUtility.HtmlEncode(s);
+        string TopLines(IReadOnlyList<TopUsageItem> items) =>
+            items.Count == 0
+                ? "        нет данных"
+                : string.Join("\n", items.Select(i => $"        • {Escape(i.Key)} — {i.Count}"));
+
+        return
+            "📊 <b>Аналитика использования</b>\n" +
+            $"Период: <b>{periodTitle}</b> (UTC)\n\n" +
+            "👥 Новые пользователи за период: <b>" + r.NewUsers + "</b>\n" +
+            "⚡ Активные пользователи: " +
+            $"<b>{r.ActiveUsers1d}</b>/24ч, <b>{r.ActiveUsers7d}</b>/7д, <b>{r.ActiveUsers30d}</b>/30д\n" +
+            "🔎 Активных подписок сейчас: <b>" + r.ActiveSearches + "</b>\n" +
+            "📨 Уведомлений доставлено за период: <b>" + r.NotificationsSent + "</b>\n\n" +
+            "⭐ <b>Топ функций:</b>\n" + TopLines(r.TopFeatures) + "\n\n" +
+            "🎛 <b>Топ пресетов (фильтры сайта):</b>\n" + TopLines(r.TopPresets) + "\n\n" +
+            "🚧 Достигли лимита подписок: " +
+            (r.LimitSharePercent.HasValue ? $"<b>{r.LimitSharePercent.Value:0.#}%</b> активных" : "нет данных") + "\n" +
+            "🚀 Конверсия запуск → первый поиск: " +
+            (r.ConversionPercent.HasValue
+                ? $"<b>{r.ConversionPercent.Value:0.#}%</b> ({r.ConvertedToFirstSearch} из {r.BotStartsInPeriod})"
+                : "нет данных") + "\n\n" +
+            "<i>События записываются с 29.10.2026 — более ранние периоды могут быть неполными.</i>";
+    }
+
     /// <summary>eph-12: compact service dashboard for the /status admin command.</summary>
     private async Task<string> BuildStatusReportAsync(AppDbContext dbContext, CancellationToken ct)
     {
@@ -1740,6 +1920,7 @@ public class BotEngine : BackgroundService
     private async Task HandleFilterTextInputAsync(
         ITelegramBotClient botClient,
         AppDbContext dbContext,
+        IUsageAnalytics analytics,
         long chatId,
         long userId,
         UserSearchDraft draft,
@@ -1763,6 +1944,9 @@ public class BotEngine : BackgroundService
                     Title = "Текст поиска",
                     Values = words
                 });
+
+                await TryRecordFeatureAsync(analytics, userId, UsageFeatures.OwnQuery, string.Join(" ", words), ct);
+
                 await botClient.SendMessage(chatId: chatId,
                     $"✅ Текст поиска: <b>{FilterWizardUI.Escape(string.Join(" ", words))}</b>",
                     parseMode: ParseMode.Html, cancellationToken: ct);
@@ -1803,6 +1987,11 @@ public class BotEngine : BackgroundService
                     Title = title,
                     Values = keywords
                 });
+
+                await TryRecordFeatureAsync(analytics, userId,
+                    pending == -10 ? UsageFeatures.OwnKeywordsInclude : UsageFeatures.OwnKeywordsExclude,
+                    string.Join(",", keywords), ct);
+
                 await botClient.SendMessage(chatId: chatId,
                     $"✅ Сохранено: <b>{FilterWizardUI.Escape(string.Join(", ", keywords))}</b>",
                     parseMode: ParseMode.Html, cancellationToken: ct);
@@ -1846,6 +2035,8 @@ public class BotEngine : BackgroundService
                 Max = parsed.Max
             });
 
+            await TryRecordPresetAsync(analytics, userId, spec, $"{parsed.Min:0.#}-{parsed.Max:0.#}", ct);
+
             await botClient.SendMessage(chatId: chatId,
                 $"✅ Фильтр <b>{FilterWizardUI.Escape(spec.Title)}</b>: {parsed.Min:0.#}–{parsed.Max:0.#}",
                 parseMode: ParseMode.Html, cancellationToken: ct);
@@ -1870,6 +2061,8 @@ public class BotEngine : BackgroundService
                 Title = spec.Title,
                 Values = new[] { parsed.TextValue! }
             });
+
+            await TryRecordPresetAsync(analytics, userId, spec, parsed.TextValue, ct);
 
             await botClient.SendMessage(chatId: chatId,
                 $"✅ Фильтр <b>{FilterWizardUI.Escape(spec.Title)}</b>: {FilterWizardUI.Escape(parsed.TextValue)}",

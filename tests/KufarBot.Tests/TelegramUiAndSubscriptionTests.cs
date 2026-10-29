@@ -223,6 +223,7 @@ public class TelegramUiAndSubscriptionTests
         serviceCollection.AddDbContext<AppDbContext>(opt => opt.UseSqlite($"DataSource={dbName};Mode=Memory;Cache=Shared"));
         serviceCollection.AddScoped<ISearchSubscriptionService, SearchSubscriptionService>();
         serviceCollection.AddScoped<ICategoryService>(_ => Mock.Of<ICategoryService>());
+        serviceCollection.AddScoped<KufarBot.Infrastructure.Analytics.IUsageAnalytics, KufarBot.Infrastructure.Analytics.UsageAnalytics>();
         var serviceProvider = serviceCollection.BuildServiceProvider();
 
         var botClientMock = new Mock<ITelegramBotClient>();

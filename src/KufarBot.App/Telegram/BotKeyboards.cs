@@ -4,6 +4,7 @@ using System.Linq;
 using Telegram.Bot.Types.ReplyMarkups;
 using KufarBot.Core.Filters;
 using KufarBot.Core.Models;
+using KufarBot.Infrastructure.Analytics;
 using KufarBot.Infrastructure.Persistence;
 using KufarBot.Infrastructure.Telegram;
 
@@ -270,6 +271,32 @@ public static class BotKeyboards
         return new InlineKeyboardMarkup(new[]
         {
             new[] { InlineKeyboardButton.WithCallbackData("⬅️ Отмена ввода", "menu_draft") }
+        });
+    }
+
+    /// <summary>eph-17: period switcher for the /admin analytics report.</summary>
+    public static InlineKeyboardMarkup AdminStatsMenu(AnalyticsPeriod current)
+    {
+        (AnalyticsPeriod Period, string Label, string Data)[] buttons =
+        {
+            (AnalyticsPeriod.Day, "Сутки", "admst_d"),
+            (AnalyticsPeriod.Week, "Неделя", "admst_w"),
+            (AnalyticsPeriod.Month, "Месяц", "admst_m")
+        };
+
+        return new InlineKeyboardMarkup(new[]
+        {
+            buttons.Select(b =>
+            {
+                var btn = InlineKeyboardButton.WithCallbackData(
+                    b.Period == current ? $"✅ {b.Label}" : b.Label, b.Data);
+                if (b.Period == current)
+                {
+                    btn.Primary();
+                }
+                return btn;
+            }).ToArray(),
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
         });
     }
 

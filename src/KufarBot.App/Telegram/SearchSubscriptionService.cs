@@ -4,6 +4,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using KufarBot.Core.Filters;
+using KufarBot.Core.Analytics;
+using KufarBot.Infrastructure.Analytics;
 using KufarBot.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -45,11 +47,34 @@ public class SearchSubscriptionService : ISearchSubscriptionService
 {
     private readonly AppDbContext _dbContext;
     private readonly ILogger<SearchSubscriptionService> _logger;
+    private readonly IUsageAnalytics? _analytics;
 
-    public SearchSubscriptionService(AppDbContext dbContext, ILogger<SearchSubscriptionService> logger)
+    public SearchSubscriptionService(
+        AppDbContext dbContext,
+        ILogger<SearchSubscriptionService> logger,
+        IUsageAnalytics? analytics = null)
     {
         _dbContext = dbContext ?? throw new ArgumentNullException(nameof(dbContext));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _analytics = analytics;
+    }
+
+    /// <summary>eph-17: analytics must never break the subscription flow.</summary>
+    private async Task TryRecordAsync(long userId, string eventType, object? properties, CancellationToken ct)
+    {
+        if (_analytics == null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _analytics.RecordAsync(userId, eventType, properties, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[SearchSubscriptionService] Analytics recording failed for {Event}", eventType);
+        }
     }
 
     public async Task<UserSearchEntity> SaveSearchAsync(
@@ -128,6 +153,9 @@ public class SearchSubscriptionService : ISearchSubscriptionService
         await _dbContext.SaveChangesAsync(ct);
         _logger.LogInformation("[SearchSubscriptionService] Created search Id={SearchId} for User={UserId}", search.Id, userId);
 
+        await TryRecordAsync(userId, UsageEventTypes.SearchCreated,
+            new { target = $"search:{search.Id}", preset = subcategoryTitle }, ct);
+
         return search;
     }
 
@@ -151,6 +179,9 @@ public class SearchSubscriptionService : ISearchSubscriptionService
         // The filter set defines the feed identity — release the old feed if nothing else uses it
         await CleanupOrphanedFeedsIfAnyAsync(search.SubcategoryId, search.CityId, oldFeedJson, ct);
         _logger.LogInformation("[SearchSubscriptionService] Updated filters for search Id={SearchId}, User={UserId}", searchId, userId);
+
+        await TryRecordAsync(userId, UsageEventTypes.SearchUpdated,
+            new { target = $"search:{searchId}", scope = "filters" }, ct);
         return true;
     }
 
@@ -194,6 +225,9 @@ public class SearchSubscriptionService : ISearchSubscriptionService
 
         await CleanupOrphanedFeedsIfAnyAsync(oldSubcategoryId, oldCityId, oldFeedJson, ct);
         _logger.LogInformation("[SearchSubscriptionService] Updated search Id={SearchId} (city={CityId}, User={UserId})", searchId, cityId, userId);
+
+        await TryRecordAsync(userId, UsageEventTypes.SearchUpdated,
+            new { target = $"search:{searchId}", scope = "core" }, ct);
         return true;
     }
 
@@ -289,6 +323,9 @@ public class SearchSubscriptionService : ISearchSubscriptionService
         await CleanupOrphanedFeedsIfAnyAsync(subcategoryId, cityId, feedJson, ct);
 
         _logger.LogInformation("[SearchSubscriptionService] Deleted search Id={SearchId} for User={UserId}", searchId, userId);
+
+        await TryRecordAsync(userId, UsageEventTypes.SearchDeleted,
+            new { target = $"search:{searchId}" }, ct);
         return true;
     }
 

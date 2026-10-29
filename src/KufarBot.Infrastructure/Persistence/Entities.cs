@@ -103,3 +103,15 @@ public class NotificationOutboxEntity
     public DateTime CreatedAtUtc { get; set; }
     public DateTime? SentAtUtc { get; set; }
 }
+
+/// <summary>eph-17: usage analytics event. Plain event log — no FK to Users on
+/// purpose, so events survive and the identity/system of records stays in the
+/// existing Users / UserSearches tables.</summary>
+public class UsageEventEntity
+{
+    public int Id { get; set; }
+    public long UserId { get; set; }
+    public string EventType { get; set; } = string.Empty;
+    public DateTime OccurredAtUtc { get; set; }
+    public string? PropertiesJson { get; set; }
+}
