@@ -323,19 +323,29 @@ public class OutboxDeliveryWorker : BackgroundService
         }
     }
 
-    /// <summary>eph-17: new-ad notifications carry the ⭐ / tracked-📖 buttons; favorites events too.</summary>
+    /// <summary>eph-17: every delivered listing carries the tracked 📖 button (the only
+    /// listing access point — inline links were removed for that reason); ⭐ also for
+    /// kinds where favorites still make sense.</summary>
     private InlineKeyboardMarkup? BuildReplyMarkup(OutboxPayload payload)
     {
-        if (payload.Kind != OutboxPayload.KindNewAd)
+        if (payload.Kind == OutboxPayload.KindNewAd || payload.Kind == OutboxPayload.KindPriceDrop)
         {
-            return null;
+            return new InlineKeyboardMarkup(new[]
+            {
+                InlineKeyboardButton.WithCallbackData("⭐ В избранное", $"fav_{payload.AdId}"),
+                InlineKeyboardButton.WithCallbackData("📖 Открыть объявление", $"open_{payload.AdId}").Primary()
+            });
         }
 
-        return new InlineKeyboardMarkup(new[]
+        if (payload.Kind == OutboxPayload.KindAdMissing)
         {
-            InlineKeyboardButton.WithCallbackData("⭐ В избранное", $"fav_{payload.AdId}"),
-            InlineKeyboardButton.WithCallbackData("📖 Открыть объявление", $"open_{payload.AdId}").Primary()
-        });
+            return new InlineKeyboardMarkup(new[]
+            {
+                InlineKeyboardButton.WithCallbackData("📖 Проверить на Kufar", $"open_{payload.AdId}").Primary()
+            });
+        }
+
+        return null;
     }
 
     private string FormatHtmlMessage(OutboxPayload payload)
@@ -343,7 +353,6 @@ public class OutboxDeliveryWorker : BackgroundService
         var title = System.Net.WebUtility.HtmlEncode(payload.Title);
         var price = System.Net.WebUtility.HtmlEncode(payload.PriceFormatted);
         var location = System.Net.WebUtility.HtmlEncode(payload.Location);
-        var link = payload.AdLink;
 
         switch (payload.Kind)
         {
@@ -354,32 +363,34 @@ public class OutboxDeliveryWorker : BackgroundService
                        $"<b>{title}</b>\n" +
                        $"💰 Цена: <b>{price}</b>" +
                        (string.IsNullOrEmpty(oldPrice) ? "" : $" (было: {oldPrice})") +
-                       $"\n📍 Место: {location}\n\n" +
-                       $"<a href=\"{link}\">Открыть объявление →</a>";
+                       $"\n📍 Место: {location}";
             }
 
             case OutboxPayload.KindAdMissing:
                 return $"🗑 <b>Объявление больше доступно не будет.</b>\n\n" +
-                       $"<b>{title}</b>\n" +
-                       $"<a href=\"{link}\">Проверить объявление →</a> (удалено с Kufar)";
+                       $"<b>{title}</b>\n(удалено с Kufar)";
 
             default:
+                // eph-17: no inline link on purpose — the tracked «📖 Открыть объявление»
+                // callback button below is the only listing access point, so every
+                // open is recorded as listing_link_clicked (inline links bypass it).
                 return $"✨ <b>Новое объявление!</b>\n\n" +
                        $"<b>{title}</b>\n" +
                        $"💰 Цена: {price}\n" +
                        $"📍 Место: {location}\n" +
-                       $"⏰ Дата: {payload.CreatedAtUtc:dd.MM.yyyy HH:mm} UTC\n\n" +
-                       $"<a href=\"{link}\">Открыть объявление →</a>";
+                       $"⏰ Дата: {payload.CreatedAtUtc:dd.MM.yyyy HH:mm} UTC";
         }
     }
 
-    /// <summary>Short text under the photo album (the caption already carries the details).</summary>
+    /// <summary>Short text under the photo album (the caption already carries the details).
+    /// eph-17: no inline link — the tracked open-button in the following message is the
+    /// only access point, inline links would bypass listing_link_clicked recording.</summary>
     private static string FollowUpHtml(OutboxPayload payload)
     {
         var title = System.Net.WebUtility.HtmlEncode(payload.Title);
         var price = System.Net.WebUtility.HtmlEncode(payload.PriceFormatted);
         var location = System.Net.WebUtility.HtmlEncode(payload.Location);
-        return $"<a href=\"{payload.AdLink}\"><b>{title}</b></a>\n" +
+        return $"<b>{title}</b>\n" +
                $"💰 {price} • 📍 {location}";
     }
 
