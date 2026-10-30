@@ -41,6 +41,14 @@ public sealed class UsageReport
     /// <summary>% of active users (window) that hit the subscription limit, null when no active users.</summary>
     public double? LimitSharePercent { get; set; }
 
+    // eph-18: ready-made search preset funnel.
+    public int PresetCatalogViews { get; set; }
+    public int PresetSelections { get; set; }
+    public int PresetSearchesCreated { get; set; }
+    public int PresetDeclines { get; set; }
+    public IReadOnlyList<TopUsageItem> TopSearchPresets { get; set; } = Array.Empty<TopUsageItem>();
+    public IReadOnlyList<TopUsageItem> TopPresetCategories { get; set; } = Array.Empty<TopUsageItem>();
+
     /// <summary>Distinct users that ran /start within the window.</summary>
     public int BotStartsInPeriod { get; set; }
 

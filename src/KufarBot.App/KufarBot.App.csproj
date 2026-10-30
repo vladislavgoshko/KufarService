@@ -22,6 +22,8 @@
     <!-- Console SDK does not copy appsettings.json to output by default; Host builder
          reads it from the content root, so make it available next to the exe. -->
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- eph-18: preset catalog must live next to the exe (content root is the exe dir). -->
+    <None Update="Data\search-presets.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

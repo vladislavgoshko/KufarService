@@ -41,6 +41,9 @@ public class UserSearchDraft
     /// <summary>When set, the wizard edits an existing subscription (its filters) instead of creating a new one.</summary>
     public int? EditingSearchId { get; set; }
 
+    /// <summary>Preset that seeded this draft, if any (eph-18: lets draft_save attribute the creation).</summary>
+    public string? PresetId { get; set; }
+
     /// <summary>Current page of the subscriptions list (8 per page).</summary>
     public int SubscriptionsPage { get; set; }
 }
@@ -58,6 +61,18 @@ public class UserSessionStore
     private static readonly TimeSpan StaleAfter = TimeSpan.FromHours(6);
 
     private readonly ConcurrentDictionary<long, (UserSearchDraft Draft, DateTime LastActivityUtc)> _drafts = new();
+
+    /// <summary>eph-18: template id awaiting a rename via free-text message (per user).</summary>
+    private readonly ConcurrentDictionary<long, int> _pendingTemplateRename = new();
+
+    public void SetPendingTemplateRename(long userId, int templateId) =>
+        _pendingTemplateRename[userId] = templateId;
+
+    public int? PeekPendingTemplateRename(long userId) =>
+        _pendingTemplateRename.TryGetValue(userId, out var id) ? id : null;
+
+    public int? TakePendingTemplateRename(long userId) =>
+        _pendingTemplateRename.TryRemove(userId, out var id) ? id : null;
 
     public UserSearchDraft GetOrCreateDraft(long userId)
     {

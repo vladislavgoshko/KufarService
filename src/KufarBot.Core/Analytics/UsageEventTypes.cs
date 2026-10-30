@@ -14,6 +14,9 @@ public static class UsageEventTypes
     public const string LimitReached = "limit_reached";
     public const string FeatureUsed = "feature_used";
 
+    // eph-18: ready-search funnel — explicit refusal to create from a preset/card.
+    public const string PresetDeclined = "preset_declined";
+
     // Property keys in PropertiesJson.
     public const string PropFeature = "feature";
     public const string PropPreset = "preset";
@@ -30,4 +33,12 @@ public static class UsageFeatures
     public const string OwnKeywordsExclude = "own_kw_exc";
     public const string OwnSellerType = "own_seller";
     public const string OwnMaxAge = "own_age";
+
+    // eph-18: ready-made search presets and user templates.
+    public const string PresetCatalogView = "preset_catalog_view";
+    public const string PresetCreated = "preset_created";
+    public const string TemplateSaved = "template_saved";
+    public const string TemplateCreated = "template_created";
+    public const string TemplateRenamed = "template_renamed";
+    public const string TemplateDeleted = "template_deleted";
 }

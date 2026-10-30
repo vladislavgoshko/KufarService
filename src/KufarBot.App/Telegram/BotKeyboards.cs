@@ -40,6 +40,10 @@ public static class BotKeyboards
             },
             new[]
             {
+                InlineKeyboardButton.WithCallbackData("⚡ Готовые поиски", "menu_ready")
+            },
+            new[]
+            {
                 InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav")
             },
             new[]
@@ -248,7 +252,11 @@ public static class BotKeyboards
             },
             new[]
             {
-                InlineKeyboardButton.WithCallbackData("🗑️ Удалить", $"delconf_{search.Id}").Danger(),
+                InlineKeyboardButton.WithCallbackData("💾 Сохранить как шаблон", $"tpl_from_{search.Id}"),
+                InlineKeyboardButton.WithCallbackData("🗑️ Удалить", $"delconf_{search.Id}").Danger()
+            },
+            new[]
+            {
                 InlineKeyboardButton.WithCallbackData("⬅️ К списку", "menu_list")
             }
         });
@@ -263,6 +271,154 @@ public static class BotKeyboards
                 InlineKeyboardButton.WithCallbackData("⚠️ Да, удалить", $"del_{searchId}").Danger(),
                 InlineKeyboardButton.WithCallbackData("Отмена", $"subview_{searchId}")
             }
+        });
+    }
+
+    // ===================== eph-18: ready-made search presets + user templates =====================
+
+    public const int PresetsPageSize = 6;
+    public const int TemplatesPageSize = 6;
+
+    /// <summary>Catalog entry — display categories of the active presets.</summary>
+    public static InlineKeyboardMarkup PresetCategoriesMenu(IReadOnlyList<string> categories)
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+        for (int i = 0; i < categories.Count; i++)
+        {
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"📁 {categories[i]}", $"preset_cat_{i}") });
+        }
+
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("📋 Мои шаблоны", "tpl_list") });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") });
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    /// <summary>Preset list of one category with pagination.</summary>
+    public static InlineKeyboardMarkup PresetsListMenu(
+        IReadOnlyList<string> categories, int categoryIndex, IReadOnlyList<SearchPreset> categoryPresets, int page)
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+
+        int totalPages = Math.Max(1, (categoryPresets.Count + PresetsPageSize - 1) / PresetsPageSize);
+        page = Math.Clamp(page, 0, totalPages - 1);
+        foreach (var preset in categoryPresets.Skip(page * PresetsPageSize).Take(PresetsPageSize))
+        {
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"⚡ {preset.Name}", $"preset_v_{preset.Id}") });
+        }
+
+        if (totalPages > 1)
+        {
+            var nav = new List<InlineKeyboardButton>();
+            if (page > 0)
+            {
+                nav.Add(InlineKeyboardButton.WithCallbackData("⬅️", $"preset_pl_{categoryIndex}_{page - 1}"));
+            }
+
+            nav.Add(InlineKeyboardButton.WithCallbackData($"{page + 1}/{totalPages}", $"preset_pl_{categoryIndex}_{page}"));
+            if (page < totalPages - 1)
+            {
+                nav.Add(InlineKeyboardButton.WithCallbackData("➡️", $"preset_pl_{categoryIndex}_{page + 1}"));
+            }
+
+            rows.Add(nav.ToArray());
+        }
+
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("📁 Категории", $"pcatall_{categoryIndex}"),
+            InlineKeyboardButton.WithCallbackData("📋 Мои шаблоны", "tpl_list")
+        });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") });
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    /// <summary>Preset description card: create via defaults, tweak in the wizard, save as template, or decline.</summary>
+    public static InlineKeyboardMarkup PresetDetailsMenu(SearchPreset preset)
+    {
+        return new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("✅ Создать поиск", $"preset_create_{preset.Id}").Success() },
+            new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настроить город/цену", $"preset_cfg_{preset.Id}").Primary() },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("⭐ Сначала в шаблоны", $"tpl_frompreset_{preset.Id}")
+            },
+            new[] { InlineKeyboardButton.WithCallbackData("❌ Не сейчас", $"preset_cancel_{preset.Id}").Danger() },
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ К каталогу", "menu_ready") }
+        });
+    }
+
+    /// <summary>After a successful search creation — open its settings or browse on.</summary>
+    public static InlineKeyboardMarkup AfterCreateMenu(int searchId)
+    {
+        return new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("⚙️ Открыть настройки", $"fedit_{searchId}").Primary() },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("📋 Мои подписки", "menu_list"),
+                InlineKeyboardButton.WithCallbackData("⚡ Готовые поиски", "menu_ready")
+            }
+        });
+    }
+
+    public static InlineKeyboardMarkup TemplatesListMenu(IReadOnlyList<UserTemplateEntity> templates, int page)
+    {
+        var rows = new List<InlineKeyboardButton[]>();
+
+        int totalPages = Math.Max(1, (templates.Count + TemplatesPageSize - 1) / TemplatesPageSize);
+        page = Math.Clamp(page, 0, totalPages - 1);
+        foreach (var template in templates.Skip(page * TemplatesPageSize).Take(TemplatesPageSize))
+        {
+            rows.Add(new[] { InlineKeyboardButton.WithCallbackData($"📄 {template.Name}", $"tpl_v_{template.Id}") });
+        }
+
+        if (totalPages > 1)
+        {
+            var nav = new List<InlineKeyboardButton>();
+            if (page > 0)
+            {
+                nav.Add(InlineKeyboardButton.WithCallbackData("⬅️", $"tplp_{page - 1}"));
+            }
+
+            nav.Add(InlineKeyboardButton.WithCallbackData($"{page + 1}/{totalPages}", $"tplp_{page}"));
+            if (page < totalPages - 1)
+            {
+                nav.Add(InlineKeyboardButton.WithCallbackData("➡️", $"tplp_{page + 1}"));
+            }
+
+            rows.Add(nav.ToArray());
+        }
+
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("⚡ К пресетам", "menu_ready"),
+            InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main")
+        });
+        return new InlineKeyboardMarkup(rows);
+    }
+
+    public static InlineKeyboardMarkup TemplateDetailsMenu(int templateId)
+    {
+        return new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("🔎 Создать поиск", $"tpl_create_{templateId}").Success() },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("✏️ Переименовать", $"tpl_rename_{templateId}"),
+                InlineKeyboardButton.WithCallbackData("🗑️ Удалить", $"tpl_delconf_{templateId}").Danger()
+            },
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ К шаблонам", "tpl_list") },
+            new[] { InlineKeyboardButton.WithCallbackData("В главное меню", "menu_main") }
+        });
+    }
+
+    public static InlineKeyboardMarkup TemplateDeleteConfirmationMenu(int templateId)
+    {
+        return new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("⚠️ Да, удалить шаблон", $"tpl_del_{templateId}").Danger() },
+            new[] { InlineKeyboardButton.WithCallbackData("Отмена", $"tpl_v_{templateId}") }
         });
     }
 

@@ -38,6 +38,7 @@ public static class DraftPersistence
             AwaitingPriceInput = PriceInputMode.None,
             AwaitingFilterInput = null,
             SubscriptionsPage = draft.SubscriptionsPage,
+            PresetId = draft.PresetId,
             Filters = new List<Core.Filters.SavedFilter>(draft.Filters),
             AvailableSpecs = new List<Core.Filters.FilterSpec>(draft.AvailableSpecs),
             Wizard = draft.Wizard,

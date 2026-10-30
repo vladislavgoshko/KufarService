@@ -11,6 +11,7 @@ public class AppDbContext : DbContext
     public DbSet<NotificationOutboxEntity> NotificationOutbox => Set<NotificationOutboxEntity>();
     public DbSet<WatchedAdEntity> WatchedAds => Set<WatchedAdEntity>();
     public DbSet<UsageEventEntity> UsageEvents => Set<UsageEventEntity>();
+    public DbSet<UserTemplateEntity> UserTemplates => Set<UserTemplateEntity>();
 
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
     {
@@ -77,6 +78,17 @@ public class AppDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => new { e.EventType, e.OccurredAtUtc });
             entity.HasIndex(e => e.UserId);
+        });
+
+        modelBuilder.Entity<UserTemplateEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => new { e.UserId, e.Name }).IsUnique();
+            entity.Property(e => e.Name).HasMaxLength(64);
+            entity.HasOne(e => e.User)
+                  .WithMany()
+                  .HasForeignKey(e => e.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

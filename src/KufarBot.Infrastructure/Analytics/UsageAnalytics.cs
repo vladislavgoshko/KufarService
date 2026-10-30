@@ -75,10 +75,65 @@ public class UsageAnalytics : IUsageAnalytics
                              e.OccurredAtUtc >= periodStart, ct);
 
         // --- Top presets / features: grouped over PropertiesJson (parsed in memory) ---
-        report.TopPresets = await GetTopItemsAsync(
-            UsageEventTypes.PresetSelected, UsageEventTypes.PropPreset, periodStart, ct);
-        report.TopFeatures = await GetTopItemsAsync(
-            UsageEventTypes.FeatureUsed, UsageEventTypes.PropFeature, periodStart, ct);
+        var featureJsons = await _dbContext.UsageEvents
+            .Where(e => e.EventType == UsageEventTypes.FeatureUsed && e.OccurredAtUtc >= periodStart)
+            .OrderByDescending(e => e.Id)
+            .Take(5000)
+            .Select(e => e.PropertiesJson)
+            .ToListAsync(ct);
+
+        report.TopFeatures = TopItems(featureJsons.Select(j => ParseProp(j, UsageEventTypes.PropFeature)));
+
+        // eph-18: feature tallies used by the preset funnel section
+        var featureCounts = featureJsons
+            .Select(j => ParseProp(j, UsageEventTypes.PropFeature))
+            .Where(v => !string.IsNullOrEmpty(v))
+            .Select(v => v!)
+            .GroupBy(v => v, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        report.PresetCatalogViews = featureCounts.GetValueOrDefault(UsageFeatures.PresetCatalogView);
+        report.PresetSearchesCreated = featureCounts.GetValueOrDefault(UsageFeatures.PresetCreated);
+
+        var selectionJsons = await _dbContext.UsageEvents
+            .Where(e => e.EventType == UsageEventTypes.PresetSelected && e.OccurredAtUtc >= periodStart)
+            .OrderByDescending(e => e.Id)
+            .Take(5000)
+            .Select(e => e.PropertiesJson)
+            .ToListAsync(ct);
+
+        // "searchpreset:" targets are ready-search presets; plain target values are
+        // site-filter presets chosen in the wizard.
+        var siteFilterPresets = new List<string>();
+        var readyPresetSelections = new List<(string Preset, string? Category)>();
+        foreach (var json in selectionJsons)
+        {
+            var target = ParseProp(json, UsageEventTypes.PropTarget);
+            var presetName = ParseProp(json, UsageEventTypes.PropPreset);
+            if (target is null || !target.StartsWith("searchpreset:", StringComparison.Ordinal))
+            {
+                if (presetName != null)
+                {
+                    siteFilterPresets.Add(presetName);
+                }
+
+                continue;
+            }
+
+            report.PresetSelections++;
+            if (presetName != null)
+            {
+                readyPresetSelections.Add((presetName, ParseProp(json, "category")));
+            }
+        }
+
+        report.TopPresets = TopItems(siteFilterPresets);
+        report.TopSearchPresets = TopItems(readyPresetSelections.Select(s => s.Preset));
+        report.TopPresetCategories = TopItems(
+            readyPresetSelections.Where(s => !string.IsNullOrEmpty(s.Category)).Select(s => s.Category!));
+
+        report.PresetDeclines = await _dbContext.UsageEvents
+            .CountAsync(e => e.EventType == UsageEventTypes.PresetDeclined &&
+                             e.OccurredAtUtc >= periodStart, ct);
 
         // --- Limit share over active users in the window ---
         int activeUsers = period == AnalyticsPeriod.Day ? report.ActiveUsers1d
@@ -126,19 +181,10 @@ public class UsageAnalytics : IUsageAnalytics
             .CountAsync(ct);
     }
 
-    /// <summary>Groups events by a single string value inside PropertiesJson (top 5, recent first).</summary>
-    private async Task<IReadOnlyList<TopUsageItem>> GetTopItemsAsync(
-        string eventType, string propKey, DateTime periodStart, CancellationToken ct)
+    /// <summary>eph-18: top-5 grouping for pre-extracted property values.</summary>
+    private static IReadOnlyList<TopUsageItem> TopItems(IEnumerable<string?> values)
     {
-        var jsons = await _dbContext.UsageEvents
-            .Where(e => e.EventType == eventType && e.OccurredAtUtc >= periodStart)
-            .OrderByDescending(e => e.Id)
-            .Take(5000)
-            .Select(e => e.PropertiesJson)
-            .ToListAsync(ct);
-
-        return jsons
-            .Select(j => ParseProp(j, propKey))
+        return values
             .Where(v => !string.IsNullOrEmpty(v))
             .Select(v => v!)
             .GroupBy(v => v, StringComparer.OrdinalIgnoreCase)

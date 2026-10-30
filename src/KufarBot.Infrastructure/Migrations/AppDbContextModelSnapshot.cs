@@ -236,6 +236,57 @@ namespace KufarBot.Infrastructure.Migrations
                     b.ToTable("UserSearches");
                 });
 
+            modelBuilder.Entity("KufarBot.Infrastructure.Persistence.UserTemplateEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("CityId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CityName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FiltersJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("MaxPriceByn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal?>("MinPriceByn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SubcategoryId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SubcategoryTitle")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UserId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "Name")
+                        .IsUnique();
+
+                    b.ToTable("UserTemplates");
+                });
+
             modelBuilder.Entity("KufarBot.Infrastructure.Persistence.WatchedAdEntity", b =>
                 {
                     b.Property<long>("Id")
@@ -310,6 +361,17 @@ namespace KufarBot.Infrastructure.Migrations
                 {
                     b.HasOne("KufarBot.Infrastructure.Persistence.UserEntity", "User")
                         .WithMany("Searches")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("KufarBot.Infrastructure.Persistence.UserTemplateEntity", b =>
+                {
+                    b.HasOne("KufarBot.Infrastructure.Persistence.UserEntity", "User")
+                        .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

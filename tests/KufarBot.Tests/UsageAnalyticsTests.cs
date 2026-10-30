@@ -157,6 +157,71 @@ public class UsageAnalyticsTests
         Assert.Equal("preview", report.TopFeatures[1].Key);
     }
 
+    // ---------- (eph-18) ready-search preset funnel ----------
+
+    [Fact]
+    public async Task GetStatsAsync_PresetFunnel_MetricsAndTopLists()
+    {
+        await using var dbContext = CreateContext();
+        var analytics = new UsageAnalytics(dbContext, NullLogger<UsageAnalytics>.Instance);
+        DateTime now = new(2026, 10, 30, 12, 0, 0, DateTimeKind.Utc);
+
+        dbContext.UsageEvents.AddRange(
+            // catalog views: 1 outside the window
+            Event(71, UsageEventTypes.FeatureUsed, """{"feature":"preset_catalog_view","target":"catalog"}""", now.AddHours(-1)),
+            Event(72, UsageEventTypes.FeatureUsed, """{"feature":"preset_catalog_view","target":"catalog"}""", now.AddHours(-1)),
+            Event(73, UsageEventTypes.FeatureUsed, """{"feature":"preset_catalog_view","target":"catalog"}""", now.AddDays(-2)),
+            // successful creations
+            Event(71, UsageEventTypes.FeatureUsed, """{"feature":"preset_created","target":"searchpreset:rent-apartments"}""", now.AddHours(-1)),
+            Event(72, UsageEventTypes.FeatureUsed, """{"feature":"preset_created","target":"searchpreset:iphone"}""", now.AddHours(-1)),
+            // ready-search selections (target prefix "searchpreset:")
+            Event(71, UsageEventTypes.PresetSelected, """{"preset":"Аренда квартир","target":"searchpreset:rent-apartments","category":"Недвижимость"}""", now.AddHours(-1)),
+            Event(72, UsageEventTypes.PresetSelected, """{"preset":"Аренда квартир","target":"searchpreset:rent-apartments","category":"Недвижимость"}""", now.AddHours(-2)),
+            Event(73, UsageEventTypes.PresetSelected, """{"preset":"iPhone","target":"searchpreset:iphone","category":"Смартфоны"}""", now.AddHours(-2)),
+            // wizard site-filter selection — must NOT count as a ready-search selection
+            Event(74, UsageEventTypes.PresetSelected, """{"preset":"Состояние = 1","target":"cnd"}""", now.AddHours(-1)),
+            // declines
+            Event(74, UsageEventTypes.PresetDeclined, """{"target":"searchpreset:iphone"}""", now.AddHours(-1)),
+            // old decline outside the window
+            Event(75, UsageEventTypes.PresetDeclined, """{"target":"searchpreset:gpu"}""", now.AddDays(-2)));
+        await dbContext.SaveChangesAsync();
+
+        var report = await analytics.GetStatsAsync(AnalyticsPeriod.Day, CancellationToken.None, now);
+
+        Assert.Equal(2, report.PresetCatalogViews); // the third view is outside the 24h window
+        Assert.Equal(3, report.PresetSelections);
+        Assert.Equal(2, report.PresetSearchesCreated);
+        Assert.Equal(1, report.PresetDeclines);
+
+        Assert.Equal(2, report.TopSearchPresets.Count);
+        Assert.Equal("Аренда квартир", report.TopSearchPresets[0].Key);
+        Assert.Equal(2, report.TopSearchPresets[0].Count);
+        Assert.Equal("iPhone", report.TopSearchPresets[1].Key);
+        Assert.Equal(1, report.TopSearchPresets[1].Count);
+
+        Assert.Equal(2, report.TopPresetCategories.Count);
+        Assert.Equal("Недвижимость", report.TopPresetCategories[0].Key);
+        Assert.Equal(2, report.TopPresetCategories[0].Count);
+    }
+
+    [Fact]
+    public async Task GetStatsAsync_PresetFunnel_NoEvents_EmptyLists()
+    {
+        await using var dbContext = CreateContext();
+        var analytics = new UsageAnalytics(dbContext, NullLogger<UsageAnalytics>.Instance);
+
+        var report = await analytics.GetStatsAsync(AnalyticsPeriod.Day, CancellationToken.None, DateTime.UtcNow);
+
+        Assert.Equal(0, report.PresetCatalogViews);
+        Assert.Equal(0, report.PresetSelections);
+        Assert.Equal(0, report.PresetSearchesCreated);
+        Assert.Equal(0, report.PresetDeclines);
+        Assert.Empty(report.TopSearchPresets);
+        Assert.Empty(report.TopPresetCategories);
+    }
+
+    // ---------- (eph-18) attribution: wizard draft carrying a PresetId ----------
+
     // ---------- (d) UTC period boundaries ----------
 
     [Fact]

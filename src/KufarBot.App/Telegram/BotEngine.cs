@@ -33,19 +33,22 @@ public class BotEngine : BackgroundService
     private readonly UserSessionStore _sessionStore;
     private readonly ILogger<BotEngine> _logger;
     private readonly AdminOptions _adminOptions;
+    private readonly ISearchPresetCatalog _presetCatalog;
 
     public BotEngine(
         IServiceProvider serviceProvider,
         ITelegramBotClient botClient,
         UserSessionStore sessionStore,
         ILogger<BotEngine> logger,
-        AdminOptions? adminOptions = null)
+        AdminOptions? adminOptions = null,
+        ISearchPresetCatalog? presetCatalog = null)
     {
         _serviceProvider = serviceProvider ?? throw new ArgumentNullException(nameof(serviceProvider));
         _botClient = botClient ?? throw new ArgumentNullException(nameof(botClient));
         _sessionStore = sessionStore ?? throw new ArgumentNullException(nameof(sessionStore));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _adminOptions = adminOptions ?? new AdminOptions();
+        _presetCatalog = presetCatalog ?? new SearchPresetCatalog();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -280,6 +283,16 @@ public class BotEngine : BackgroundService
             await botClient.SendMessage(chatId: chatId,
                 text: stats, parseMode: ParseMode.Html,
                 replyMarkup: BotKeyboards.AdminStatsMenu(AnalyticsPeriod.Day), cancellationToken: ct);
+            return;
+        }
+
+        // eph-18: a template name awaiting rename arrives as a free-text message
+        int? pendingRenameTemplateId = _sessionStore.PeekPendingTemplateRename(message.From.Id);
+        if (pendingRenameTemplateId.HasValue && !text.StartsWith("/"))
+        {
+            _sessionStore.TakePendingTemplateRename(message.From.Id);
+            await HandleTemplateRenameInputAsync(botClient, dbContext, analytics, chatId, message.From.Id,
+                pendingRenameTemplateId.Value, text, ct);
             return;
         }
 
@@ -846,6 +859,481 @@ public class BotEngine : BackgroundService
             return;
         }
 
+        // ===================== eph-18: ready-made search presets + user templates =====================
+
+        if (data == "menu_ready")
+        {
+            // eph-18: catalog view funnel entry
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.PresetCatalogView, "catalog", ct);
+
+            var categories = _presetCatalog.Categories;
+            string catalogText = categories.Count == 0
+                ? "⚡ <b>Готовые поиски</b>\n\nКаталог временно пуст — загляните позже."
+                : "⚡ <b>Готовые поиски</b>\n\nВыберите категорию — внутри готовые поисковые запросы, " +
+                  "создающие подписку в пару нажатий без ручной настройки фильтров.";
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                catalogText, BotKeyboards.PresetCategoriesMenu(categories), ct);
+            return;
+        }
+
+        if (data.StartsWith("preset_cat_") && int.TryParse(data.Substring("preset_cat_".Length), out int presetCatIndex))
+        {
+            var categories = _presetCatalog.Categories;
+            if (presetCatIndex < 0 || presetCatIndex >= categories.Count)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Категория не найдена.", BotKeyboards.PresetCategoriesMenu(categories), ct);
+                return;
+            }
+
+            string category = categories[presetCatIndex];
+            var categoryPresets = _presetCatalog.ByCategory(category);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"📁 <b>{System.Net.WebUtility.HtmlEncode(category)}</b>\n\n" +
+                "Выберите готовый поиск:",
+                BotKeyboards.PresetsListMenu(categories, presetCatIndex, categoryPresets, 0), ct);
+            return;
+        }
+
+        if (data.StartsWith("preset_pl_"))
+        {
+            string[] parts = data.Substring("preset_pl_".Length).Split('_');
+            if (parts.Length == 2 && int.TryParse(parts[0], out int plCatIndex) && int.TryParse(parts[1], out int plPage))
+            {
+                var categories = _presetCatalog.Categories;
+                if (plCatIndex < 0 || plCatIndex >= categories.Count)
+                {
+                    await EditOrSendMessageAsync(botClient, chatId, messageId,
+                        "⚠️ Категория не найдена.", BotKeyboards.PresetCategoriesMenu(categories), ct);
+                    return;
+                }
+
+                string category = categories[plCatIndex];
+                var categoryPresets = _presetCatalog.ByCategory(category);
+
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    $"📁 <b>{System.Net.WebUtility.HtmlEncode(category)}</b>\n\nВыберите готовый поиск:",
+                    BotKeyboards.PresetsListMenu(categories, plCatIndex, categoryPresets, plPage), ct);
+                return;
+            }
+        }
+
+        if (data.StartsWith("preset_v_"))
+        {
+            string presetId = data.Substring("preset_v_".Length);
+            var preset = _presetCatalog.FindById(presetId);
+            if (preset == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Пресет не найден — возможно, каталог обновился.",
+                    BotKeyboards.PresetCategoriesMenu(_presetCatalog.Categories), ct);
+                return;
+            }
+
+            // eph-18: preset choice point (target prefix "searchpreset:" separates
+            // ready-search presets from wizard site-filter selections)
+            try
+            {
+                await analytics.RecordAsync(userId, UsageEventTypes.PresetSelected,
+                    new { preset = preset.Name, target = $"searchpreset:{preset.Id}", category = preset.Category }, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[BotEngine] PresetSelected analytics failed for User={UserId}", userId);
+            }
+
+            string? filtersHint = preset.Filters.Count > 0
+                ? $"🎛 Встроенные фильтры: <b>{preset.Filters.Count}</b>\n"
+                : "";
+            string cityLine = preset.CityId.HasValue ? $"📍 Город: <b>{System.Net.WebUtility.HtmlEncode(preset.CityName ?? "")}</b>\n" : "";
+            string priceLine = preset.MinPriceByn.HasValue || preset.MaxPriceByn.HasValue
+                ? $"💰 Цена: <b>{FormatPriceRange(preset.MinPriceByn, preset.MaxPriceByn)}</b>\n"
+                : "";
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"⚡ <b>{System.Net.WebUtility.HtmlEncode(preset.Name)}</b>\n\n" +
+                $"{System.Net.WebUtility.HtmlEncode(preset.Description)}\n\n" +
+                $"📁 Категория: <b>{System.Net.WebUtility.HtmlEncode(preset.Category)}</b>\n" +
+                $"📂 Подкатегория: <b>{System.Net.WebUtility.HtmlEncode(preset.SubcategoryTitle)}</b>\n" +
+                cityLine + priceLine + filtersHint +
+                "\nГород и цену можно донастроить перед созданием.",
+                BotKeyboards.PresetDetailsMenu(preset), ct);
+            return;
+        }
+
+        if (data.StartsWith("preset_create_"))
+        {
+            string presetId = data.Substring("preset_create_".Length);
+            var preset = _presetCatalog.FindById(presetId);
+            if (preset == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Пресет не найден — возможно, каталог обновился.",
+                    BotKeyboards.PresetCategoriesMenu(_presetCatalog.Categories), ct);
+                return;
+            }
+
+            var (created, limitHit) = await CreateSearchFromConfigurationAsync(
+                subscriptionService, analytics, userId,
+                preset.SubcategoryId, preset.SubcategoryTitle,
+                preset.CityId, preset.CityName,
+                preset.MinPriceByn, preset.MaxPriceByn,
+                SavedFilter.Serialize(preset.Filters), ct);
+
+            if (limitHit)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    $"🚧 <b>Достигнут лимит активных подписок ({MaxActiveSubscriptions}).</b>\n\n" +
+                    "Приостановите или удалите существующие подписки в разделе «Мои подписки», чтобы создать новую.",
+                    BotKeyboards.PresetCategoriesMenu(_presetCatalog.Categories), ct);
+                return;
+            }
+
+            // eph-18: successful creation attributed to the preset
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.PresetCreated,
+                $"searchpreset:{preset.Id}", ct);
+
+            int createdFilters = SavedFilter.Deserialize(created!.FiltersJson).Count;
+            string createdFiltersInfo = createdFilters > 0 ? $"🎛 Фильтров в подписке: <b>{createdFilters}</b>\n" : "";
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"🎉 <b>Подписка успешно сохранена и активирована!</b>\n\n" +
+                $"⚡ Из пресета: <b>{System.Net.WebUtility.HtmlEncode(preset.Name)}</b>\n" +
+                $"📁 Категория: <b>{System.Net.WebUtility.HtmlEncode(created.SubcategoryTitle)}</b>\n" +
+                $"📍 Город: <b>{created.CityName ?? "Вся Беларусь"}</b>\n" +
+                $"💰 Цена: <b>{FormatPriceRange(created.MinPriceByn, created.MaxPriceByn)}</b>\n" +
+                createdFiltersInfo +
+                "\nКак только на Kufar появится подходящее объявление, бот сразу пришлёт сообщение.",
+                BotKeyboards.AfterCreateMenu(created.Id), ct);
+            return;
+        }
+
+        if (data.StartsWith("preset_cfg_"))
+        {
+            string presetId = data.Substring("preset_cfg_".Length);
+            var preset = _presetCatalog.FindById(presetId);
+            if (preset == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Пресет не найден — возможно, каталог обновился.",
+                    BotKeyboards.PresetCategoriesMenu(_presetCatalog.Categories), ct);
+                return;
+            }
+
+            var draft = new UserSearchDraft
+            {
+                SubcategoryId = preset.SubcategoryId,
+                SubcategoryTitle = preset.SubcategoryTitle,
+                CityId = preset.CityId,
+                CityName = preset.CityName,
+                MinPriceByn = preset.MinPriceByn,
+                MaxPriceByn = preset.MaxPriceByn,
+                Filters = preset.Filters.ToList(),
+                PresetId = preset.Id,
+                Wizard = new FilterWizardState()
+            };
+            _sessionStore.SetDraft(userId, draft);
+
+            await EnsureFilterSpecsLoadedAsync(botClient, chatId, messageId, draft, ct);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"⚡ <b>Пресет «{System.Net.WebUtility.HtmlEncode(preset.Name)}»</b>\n\n" +
+                "Проверьте настройки — город, цену и фильтры можно изменить, " +
+                "затем нажмите «✅ Сохранить подписку».",
+                BotKeyboards.SearchDraftMenu(draft), ct);
+            return;
+        }
+
+        if (data.StartsWith("preset_cancel_"))
+        {
+            string presetId = data.Substring("preset_cancel_".Length);
+
+            // eph-18: explicit refusal — funnel exit point
+            try
+            {
+                await analytics.RecordAsync(userId, UsageEventTypes.PresetDeclined,
+                    new { target = $"searchpreset:{presetId}" }, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[BotEngine] PresetDeclined analytics failed for User={UserId}", userId);
+            }
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                "👌 Без проблем — каталог готовых поисков всегда доступен из главного меню.",
+                BotKeyboards.PresetCategoriesMenu(_presetCatalog.Categories), ct);
+            return;
+        }
+
+        if (data == "tpl_list")
+        {
+            var templates = await dbContext.UserTemplates
+                .Where(t => t.UserId == userId)
+                .OrderBy(t => t.CreatedAtUtc)
+                .ToListAsync(ct);
+
+            string tplText = templates.Count == 0
+                ? "📋 <b>Мои шаблоны</b>\n\nУ вас пока нет шаблонов.\n\n" +
+                  "Шаблон — это сохранённая копия параметров поиска. Создайте подписку, " +
+                  "откройте её и нажмите «💾 Сохранить как шаблон»."
+                : "📋 <b>Мои шаблоны</b>\n\nВыберите шаблон, чтобы создать по нему поиск:";
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                tplText, BotKeyboards.TemplatesListMenu(templates, 0), ct);
+            return;
+        }
+
+        if (data.StartsWith("tplp_") && int.TryParse(data.Substring(5), out int tplPage))
+        {
+            var templates = await dbContext.UserTemplates
+                .Where(t => t.UserId == userId)
+                .OrderBy(t => t.CreatedAtUtc)
+                .ToListAsync(ct);
+
+            if (templates.Count == 0)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "📋 <b>У вас пока нет шаблонов.</b>",
+                    BotKeyboards.PresetCategoriesMenu(_presetCatalog.Categories), ct);
+                return;
+            }
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                "📋 <b>Мои шаблоны</b>\n\nВыберите шаблон, чтобы создать по нему поиск:",
+                BotKeyboards.TemplatesListMenu(templates, tplPage), ct);
+            return;
+        }
+
+        if (data.StartsWith("tpl_v_") && int.TryParse(data.Substring(6), out int templateViewId))
+        {
+            var template = await dbContext.UserTemplates.FirstOrDefaultAsync(t => t.Id == templateViewId && t.UserId == userId, ct);
+            if (template == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Шаблон не найден или был удалён.", BotKeyboards.MainMenu(), ct);
+                return;
+            }
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"📄 <b>{System.Net.WebUtility.HtmlEncode(template.Name)}</b>\n\n" +
+                $"📁 Категория: <b>{System.Net.WebUtility.HtmlEncode(template.SubcategoryTitle)}</b>\n" +
+                $"📍 Город: <b>{template.CityName ?? "Вся Беларусь"}</b>\n" +
+                $"💰 Цена: <b>{FormatPriceRange(template.MinPriceByn, template.MaxPriceByn)}</b>\n" +
+                $"🎛 Фильтров: <b>{SavedFilter.Deserialize(template.FiltersJson).Count}</b>\n\n" +
+                "Создать поиск по этому шаблону?",
+                BotKeyboards.TemplateDetailsMenu(template.Id), ct);
+            return;
+        }
+
+        if (data.StartsWith("tpl_create_") && int.TryParse(data.Substring(11), out int templateCreateId))
+        {
+            var template = await dbContext.UserTemplates.FirstOrDefaultAsync(t => t.Id == templateCreateId && t.UserId == userId, ct);
+            if (template == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Шаблон не найден или был удалён.", BotKeyboards.MainMenu(), ct);
+                return;
+            }
+
+            var (created, limitHit) = await CreateSearchFromConfigurationAsync(
+                subscriptionService, analytics, userId,
+                template.SubcategoryId, template.SubcategoryTitle,
+                template.CityId, template.CityName,
+                template.MinPriceByn, template.MaxPriceByn,
+                template.FiltersJson, ct);
+
+            if (limitHit)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    $"🚧 <b>Достигнут лимит активных подписок ({MaxActiveSubscriptions}).</b>\n\n" +
+                    "Приостановите или удалите существующие подписки в разделе «Мои подписки», чтобы создать новую.",
+                    BotKeyboards.TemplatesListMenu(
+                        await dbContext.UserTemplates.Where(t => t.UserId == userId).OrderBy(t => t.CreatedAtUtc).ToListAsync(ct), 0), ct);
+                return;
+            }
+
+            // eph-18: template-to-search usage
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.TemplateCreated,
+                $"template:{template.Id}", ct);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"🎉 <b>Подписка успешно сохранена и активирована!</b>\n\n" +
+                $"📄 По шаблону: <b>{System.Net.WebUtility.HtmlEncode(template.Name)}</b>\n" +
+                $"📁 Категория: <b>{System.Net.WebUtility.HtmlEncode(created!.SubcategoryTitle)}</b>\n" +
+                $"📍 Город: <b>{created.CityName ?? "Вся Беларусь"}</b>\n" +
+                $"💰 Цена: <b>{FormatPriceRange(created.MinPriceByn, created.MaxPriceByn)}</b>\n" +
+                "\nКак только на Kufar появится подходящее объявление, бот сразу пришлёт сообщение.",
+                BotKeyboards.AfterCreateMenu(created.Id), ct);
+            return;
+        }
+
+        if (data.StartsWith("tpl_rename_") && int.TryParse(data.Substring(11), out int templateRenameId))
+        {
+            var template = await dbContext.UserTemplates.FirstOrDefaultAsync(t => t.Id == templateRenameId && t.UserId == userId, ct);
+            if (template == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Шаблон не найден или был удалён.", BotKeyboards.MainMenu(), ct);
+                return;
+            }
+
+            _sessionStore.SetPendingTemplateRename(userId, template.Id);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"✏️ <b>Переименование шаблона «{System.Net.WebUtility.HtmlEncode(template.Name)}»</b>\n\n" +
+                "Пришлите новое название сообщением (1–64 символа).",
+                new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("Отмена", $"tpl_v_{template.Id}") }
+                }), ct);
+            return;
+        }
+
+        if (data.StartsWith("tpl_delconf_") && int.TryParse(data.Substring(12), out int templateDelConfId))
+        {
+            var template = await dbContext.UserTemplates.FirstOrDefaultAsync(t => t.Id == templateDelConfId && t.UserId == userId, ct);
+            if (template == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Шаблон не найден или был удалён.", BotKeyboards.MainMenu(), ct);
+                return;
+            }
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"⚠️ <b>Удалить шаблон «{System.Net.WebUtility.HtmlEncode(template.Name)}»?</b>\n\n" +
+                "Подписки, созданные по нему, не пострадают.",
+                BotKeyboards.TemplateDeleteConfirmationMenu(template.Id), ct);
+            return;
+        }
+
+        if (data.StartsWith("tpl_del_") && int.TryParse(data.Substring(8), out int templateDeleteId))
+        {
+            var template = await dbContext.UserTemplates.FirstOrDefaultAsync(t => t.Id == templateDeleteId && t.UserId == userId, ct);
+            if (template == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Шаблон не найден или был удалён.", BotKeyboards.MainMenu(), ct);
+                return;
+            }
+
+            dbContext.UserTemplates.Remove(template);
+            await dbContext.SaveChangesAsync(ct);
+
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.TemplateDeleted,
+                $"template:{template.Id}", ct);
+
+            var remaining = await dbContext.UserTemplates
+                .Where(t => t.UserId == userId)
+                .OrderBy(t => t.CreatedAtUtc)
+                .ToListAsync(ct);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"🗑 Шаблон «{System.Net.WebUtility.HtmlEncode(template.Name)}» удалён.",
+                BotKeyboards.TemplatesListMenu(remaining, 0), ct);
+            return;
+        }
+
+        if (data.StartsWith("tpl_from_") && int.TryParse(data.Substring(9), out int tplFromSearchId))
+        {
+            var search = await subscriptionService.GetSearchByIdAsync(tplFromSearchId, userId, ct);
+            if (search == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Подписка не найдена или была удалена.", BotKeyboards.MainMenu(), ct);
+                return;
+            }
+
+            var taken = await dbContext.UserTemplates
+                .Where(t => t.UserId == userId)
+                .Select(t => t.Name)
+                .ToListAsync(ct);
+            string name = UniqueTemplateName(taken, search.SubcategoryTitle);
+
+            var now = DateTime.UtcNow;
+            var entity = new UserTemplateEntity
+            {
+                UserId = userId,
+                Name = name,
+                SubcategoryId = search.SubcategoryId,
+                SubcategoryTitle = search.SubcategoryTitle,
+                CityId = search.CityId,
+                CityName = search.CityName,
+                MinPriceByn = search.MinPriceByn,
+                MaxPriceByn = search.MaxPriceByn,
+                FiltersJson = string.IsNullOrWhiteSpace(search.FiltersJson) ? "[]" : search.FiltersJson,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            };
+            dbContext.UserTemplates.Add(entity);
+            await dbContext.SaveChangesAsync(ct);
+
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.TemplateSaved,
+                $"search:{search.Id}", ct);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"💾 <b>Шаблон «{System.Net.WebUtility.HtmlEncode(name)}» сохранён!</b>\n\n" +
+                "Найти его можно в разделе ⚡ Готовые поиски → 📋 Мои шаблоны.",
+                new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("📄 Открыть шаблон", $"tpl_v_{entity.Id}") },
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ К подписке", $"subview_{search.Id}") }
+                }), ct);
+            return;
+        }
+
+        if (data.StartsWith("tpl_frompreset_"))
+        {
+            string tplPresetId = data.Substring("tpl_frompreset_".Length);
+            var preset = _presetCatalog.FindById(tplPresetId);
+            if (preset == null)
+            {
+                await EditOrSendMessageAsync(botClient, chatId, messageId,
+                    "⚠️ Пресет не найден — возможно, каталог обновился.",
+                    BotKeyboards.PresetCategoriesMenu(_presetCatalog.Categories), ct);
+                return;
+            }
+
+            var taken = await dbContext.UserTemplates
+                .Where(t => t.UserId == userId)
+                .Select(t => t.Name)
+                .ToListAsync(ct);
+            string name = UniqueTemplateName(taken, preset.Name);
+
+            var now = DateTime.UtcNow;
+            var entity = new UserTemplateEntity
+            {
+                UserId = userId,
+                Name = name,
+                SubcategoryId = preset.SubcategoryId,
+                SubcategoryTitle = preset.SubcategoryTitle,
+                CityId = preset.CityId,
+                CityName = preset.CityName,
+                MinPriceByn = preset.MinPriceByn,
+                MaxPriceByn = preset.MaxPriceByn,
+                FiltersJson = SavedFilter.Serialize(preset.Filters),
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now
+            };
+            dbContext.UserTemplates.Add(entity);
+            await dbContext.SaveChangesAsync(ct);
+
+            // Personal template — strictly decoupled from the public preset catalog
+            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.TemplateSaved,
+                $"searchpreset:{preset.Id}", ct);
+
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"💾 <b>Шаблон «{System.Net.WebUtility.HtmlEncode(name)}» сохранён!</b>\n\n" +
+                "Это ваша личная копия — общий каталог пресетов не изменится.",
+                new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("📄 Открыть шаблон", $"tpl_v_{entity.Id}") },
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ К пресету", $"preset_v_{preset.Id}") }
+                }), ct);
+            return;
+        }
+
         // ===================== Edit existing subscription's filters =====================
 
         if (data.StartsWith("fedit_") && int.TryParse(data.Substring(6), out int editSearchId))
@@ -1118,6 +1606,13 @@ public class BotEngine : BackgroundService
                 filtersJson: SavedFilter.Serialize(draft.Filters),
                 ct: ct
             );
+
+            // eph-18: attribute the creation to the seeding preset (if any)
+            if (draft.PresetId != null)
+            {
+                await TryRecordFeatureAsync(analytics, userId, UsageFeatures.PresetCreated,
+                    $"searchpreset:{draft.PresetId}", ct);
+            }
 
             _sessionStore.ResetDraft(userId);
 
@@ -1797,6 +2292,87 @@ public class BotEngine : BackgroundService
         return days == 1 ? "1 дн назад" : $"{days} дн назад";
     }
 
+    // ===================== eph-18: shared creation helpers =====================
+
+    /// <summary>
+    /// Creates an ordinary search (subscription) from a preset or template configuration.
+    /// The limit check tolerates duplicates: when the identical search already exists,
+    /// SaveSearchAsync returns it (idempotent), so the user is never blocked by their own
+    /// re-press. Returns the saved search, or (null, true) when the limit was hit.
+    /// </summary>
+    private async Task<(UserSearchEntity? Search, bool LimitHit)> CreateSearchFromConfigurationAsync(
+        ISearchSubscriptionService subscriptionService,
+        IUsageAnalytics analytics,
+        long userId,
+        int subcategoryId,
+        string subcategoryTitle,
+        int? cityId,
+        string? cityName,
+        decimal? minPriceByn,
+        decimal? maxPriceByn,
+        string? filtersJson,
+        CancellationToken ct)
+    {
+        var searches = await subscriptionService.GetUserSearchesAsync(userId, ct);
+        bool hasDuplicate = searches.Any(s =>
+            s.SubcategoryId == subcategoryId &&
+            s.CityId == cityId &&
+            s.MinPriceByn == minPriceByn &&
+            s.MaxPriceByn == maxPriceByn);
+
+        int activeCount = searches.Count(s => !s.IsPaused);
+        if (activeCount >= MaxActiveSubscriptions && !hasDuplicate)
+        {
+            await analytics.RecordAsync(userId, UsageEventTypes.LimitReached,
+                new { target = $"user:{userId}", limit = MaxActiveSubscriptions, active = activeCount }, ct);
+            return (null, true);
+        }
+
+        var saved = await subscriptionService.SaveSearchAsync(
+            userId: userId,
+            subcategoryId: subcategoryId,
+            subcategoryTitle: subcategoryTitle,
+            cityId: cityId,
+            cityName: cityName,
+            minPriceByn: minPriceByn,
+            maxPriceByn: maxPriceByn,
+            filtersJson: filtersJson,
+            ct: ct);
+
+        return (saved, false);
+    }
+
+    /// <summary>Returns baseName, or baseName + " 2"/" 3"/... when a template with that name already exists.</summary>
+    private static string UniqueTemplateName(IEnumerable<string> takenNames, string baseName)
+    {
+        baseName = baseName.Trim();
+        if (baseName.Length > 64)
+        {
+            baseName = baseName[..64].Trim();
+        }
+
+        var taken = new HashSet<string>(takenNames.Where(n => !string.IsNullOrWhiteSpace(n)), StringComparer.OrdinalIgnoreCase);
+        if (!taken.Contains(baseName))
+        {
+            return baseName;
+        }
+
+        for (int i = 2; i < 100; i++)
+        {
+            string suffix = $" {i}";
+            string candidate = baseName.Length + suffix.Length <= 64
+                ? baseName + suffix
+                : baseName[..(64 - suffix.Length)].TrimEnd() + suffix;
+
+            if (!taken.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return $"{baseName[..Math.Min(56, baseName.Length)].TrimEnd()} {DateTime.UtcNow.Ticks % 100000}";
+    }
+
     // ===================== Usage analytics (eph-17) =====================
 
     /// <summary>Records a FeatureUsed event; analytics failures must never break UI handling.</summary>
@@ -1858,6 +2434,11 @@ public class BotEngine : BackgroundService
             "🔎 Активных подписок сейчас: <b>" + r.ActiveSearches + "</b>\n" +
             "📨 Уведомлений доставлено за период: <b>" + r.NotificationsSent + "</b>\n\n" +
             "⭐ <b>Топ функций:</b>\n" + TopLines(r.TopFeatures) + "\n\n" +
+            "⚡ <b>Готовые поиски:</b>\n" +
+            $"        Каталог открыт: <b>{r.PresetCatalogViews}</b> · выбор пресета: <b>{r.PresetSelections}</b>\n" +
+            $"        Создано поисков: <b>{r.PresetSearchesCreated}</b> · отказов: <b>{r.PresetDeclines}</b>\n" +
+            "        <b>Топ пресетов:</b>\n" + TopLines(r.TopSearchPresets) + "\n" +
+            "        <b>Топ категорий:</b>\n" + TopLines(r.TopPresetCategories) + "\n\n" +
             "🎛 <b>Топ пресетов (фильтры сайта):</b>\n" + TopLines(r.TopPresets) + "\n\n" +
             "🚧 Достигли лимита подписок: " +
             (r.LimitSharePercent.HasValue ? $"<b>{r.LimitSharePercent.Value:0.#}%</b> активных" : "нет данных") + "\n" +
@@ -1915,6 +2496,71 @@ public class BotEngine : BackgroundService
         lines.Add("");
         lines.Add($"🕐 Проверено (UTC): {nowUtc:yyyy-MM-dd HH:mm:ss}");
         return string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// eph-18: processes the new name for a template rename (1–64 chars, unique per user).
+    /// Input errors re-arm the pending rename so the user can simply send another name.
+    /// </summary>
+    private async Task HandleTemplateRenameInputAsync(
+        ITelegramBotClient botClient,
+        AppDbContext dbContext,
+        IUsageAnalytics analytics,
+        long chatId,
+        long userId,
+        int templateId,
+        string text,
+        CancellationToken ct)
+    {
+        // Retry loop: message-driven input — inline keyboard can't be "edited", so each
+        // correction re-arms the pending rename and tells the user what was wrong.
+        void ReArm() => _sessionStore.SetPendingTemplateRename(userId, templateId);
+        void BackToTemplate() => _sessionStore.TakePendingTemplateRename(userId);
+
+        var template = await dbContext.UserTemplates.FirstOrDefaultAsync(t => t.Id == templateId && t.UserId == userId, ct);
+        if (template == null)
+        {
+            BackToTemplate();
+            await botClient.SendMessage(chatId: chatId,
+                "⚠️ Шаблон не найден или был удалён.", cancellationToken: ct);
+            return;
+        }
+
+        string newName = text.Trim();
+        if (newName.Length < 1 || newName.Length > 64)
+        {
+            ReArm();
+            await botClient.SendMessage(chatId: chatId,
+                $"❌ Название должно быть от 1 до 64 символов (сейчас {newName.Length}). Попробуйте ещё раз:",
+                cancellationToken: ct);
+            return;
+        }
+
+        bool nameTaken = await dbContext.UserTemplates
+            .AnyAsync(t => t.UserId == userId && t.Id != templateId && t.Name == newName, ct);
+        if (nameTaken)
+        {
+            ReArm();
+            await botClient.SendMessage(chatId: chatId,
+                $"❌ Шаблон с названием «{System.Net.WebUtility.HtmlEncode(newName)}» уже есть. " +
+                "Пришлите другое название:",
+                parseMode: ParseMode.Html, cancellationToken: ct);
+            return;
+        }
+
+        string oldName = template.Name;
+        template.Name = newName;
+        template.UpdatedAtUtc = DateTime.UtcNow;
+        await dbContext.SaveChangesAsync(ct);
+
+        await TryRecordFeatureAsync(analytics, userId, UsageFeatures.TemplateRenamed,
+            $"template:{template.Id}", ct);
+
+        await botClient.SendMessage(chatId: chatId,
+            $"✅ Шаблон «{System.Net.WebUtility.HtmlEncode(oldName)}» переименован в «{System.Net.WebUtility.HtmlEncode(newName)}».",
+            parseMode: ParseMode.Html,
+            replyMarkup: BotKeyboards.TemplateDetailsMenu(template.Id),
+            cancellationToken: ct);
     }
 
     private async Task HandleFilterTextInputAsync(

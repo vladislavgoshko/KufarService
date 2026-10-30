@@ -1,0 +1,71 @@
+[
+  {
+    "id": "rent-apartments",
+    "name": "Аренда квартир",
+    "description": "Долгосрочная аренда квартир по всей Беларуси. Город и цену можно уточнить на следующем шаге.",
+    "category": "Недвижимость",
+    "subcategoryId": 1010,
+    "subcategoryTitle": "Квартиры",
+    "urlFilters": [
+      { "key": "typ", "value": "let", "title": "Тип сделки: аренда" }
+    ],
+    "sortOrder": 1,
+    "isActive": true
+  },
+  {
+    "id": "sell-apartments",
+    "name": "Продажа квартир",
+    "description": "Квартиры на продажу. Тип сделки — покупка; город и цену можно уточнить позже.",
+    "category": "Недвижимость",
+    "subcategoryId": 1010,
+    "subcategoryTitle": "Квартиры",
+    "urlFilters": [
+      { "key": "typ", "value": "sell", "title": "Тип сделки: продажа" }
+    ],
+    "sortOrder": 2,
+    "isActive": true
+  },
+  {
+    "id": "iphone",
+    "name": "iPhone",
+    "description": "Мобильные телефоны со словом «iPhone» в описании.",
+    "category": "Смартфоны",
+    "subcategoryId": 17010,
+    "subcategoryTitle": "Мобильные телефоны",
+    "queryWords": [ "iphone" ],
+    "sortOrder": 3,
+    "isActive": true
+  },
+  {
+    "id": "samsung-galaxy",
+    "name": "Samsung Galaxy",
+    "description": "Смартфоны Samsung (подкатегория «Мобильные телефоны», модель — Samsung).",
+    "category": "Смартфоны",
+    "subcategoryId": 17010,
+    "subcategoryTitle": "Мобильные телефоны",
+    "queryWords": [ "samsung" ],
+    "sortOrder": 4,
+    "isActive": true
+  },
+  {
+    "id": "gpu",
+    "name": "Видеокарты",
+    "description": "Комплектующие ПК: видеокарты.",
+    "category": "Компьютеры",
+    "subcategoryId": 16010,
+    "subcategoryTitle": "Комплектующие",
+    "queryWords": [ "видеокарта" ],
+    "sortOrder": 5,
+    "isActive": true
+  },
+  {
+    "id": "laptops",
+    "name": "Ноутбуки",
+    "description": "Все ноутбуки, без дополнительных ограничений. Год, цену и состояние можно настроить после создания.",
+    "category": "Компьютеры",
+    "subcategoryId": 16040,
+    "subcategoryTitle": "Ноутбуки",
+    "sortOrder": 6,
+    "isActive": true
+  }
+]

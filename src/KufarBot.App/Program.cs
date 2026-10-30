@@ -59,6 +59,11 @@ public class Program
         builder.Services.AddScoped<ISearchSubscriptionService, SearchSubscriptionService>();
         builder.Services.AddScoped<IUsageAnalytics, UsageAnalytics>();
 
+        // eph-18: ready-made search preset catalog (JSON file edited by the developer)
+        builder.Services.Configure<SearchPresetOptions>(
+            builder.Configuration.GetSection(SearchPresetOptions.SectionName));
+        builder.Services.AddSingleton<ISearchPresetCatalog, SearchPresetCatalog>();
+
         // Worker options from configuration (appsettings: sections "Polling" and "Outbox")
         builder.Services.Configure<FeedPollingOptions>(
             builder.Configuration.GetSection(FeedPollingOptions.SectionName));

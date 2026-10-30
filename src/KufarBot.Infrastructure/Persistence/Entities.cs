@@ -115,3 +115,23 @@ public class UsageEventEntity
     public DateTime OccurredAtUtc { get; set; }
     public string? PropertiesJson { get; set; }
 }
+
+/// <summary>eph-18: a user's personal search template — a copy of search parameters
+/// (subcategory, city, prices, SavedFilter JSON) that can spawn ordinary searches.
+/// Strictly per-user: editing/renaming never touches the shared preset catalog.</summary>
+public class UserTemplateEntity
+{
+    public int Id { get; set; }
+    public long UserId { get; set; }
+    public UserEntity User { get; set; } = null!;
+    public string Name { get; set; } = string.Empty;
+    public int SubcategoryId { get; set; }
+    public string SubcategoryTitle { get; set; } = string.Empty;
+    public int? CityId { get; set; }
+    public string? CityName { get; set; }
+    public decimal? MinPriceByn { get; set; }
+    public decimal? MaxPriceByn { get; set; }
+    public string FiltersJson { get; set; } = "[]";
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
+}
