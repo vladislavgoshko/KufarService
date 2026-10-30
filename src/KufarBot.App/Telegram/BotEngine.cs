@@ -880,6 +880,64 @@ public class BotEngine : BackgroundService
             return;
         }
 
+        // Clear the filter whose value is currently being entered (eph-19):
+        // Telegram cannot send empty messages, so removal is an explicit button.
+        if (data == "finpclr")
+        {
+            var draft = _sessionStore.GetOrCreateDraft(userId);
+            int? pendingInput = draft.AwaitingFilterInput;
+            draft.AwaitingFilterInput = null;
+            draft.AwaitingPriceInput = PriceInputMode.None;
+
+            switch (pendingInput)
+            {
+                case -12:
+                    draft.Filters.RemoveAll(f => f.Kind == SavedFilterKind.Query);
+                    if (draft.EditingSearchId.HasValue)
+                    {
+                        await EditOrSendMessageAsync(botClient, chatId, messageId,
+                            "🧹 Текст поиска удалён.\n\n🎛 Свои фильтры:",
+                            BotKeyboards.OwnFiltersMenu(draft), ct);
+                    }
+                    else
+                    {
+                        await EditOrSendMessageAsync(botClient, chatId, messageId,
+                            $"🧹 Текст поиска удалён.\n\n⚙️ <b>Настройка параметров поиска:</b>\n\n{FormatDraftSummary(draft)}",
+                            BotKeyboards.SearchDraftMenu(draft), ct);
+                    }
+                    break;
+
+                case -10:
+                case -11:
+                    draft.Filters.RemoveAll(f =>
+                        pendingInput == -10 && f.Kind == SavedFilterKind.KeywordsInclude ||
+                        pendingInput == -11 && f.Kind == SavedFilterKind.KeywordsExclude);
+                    await EditOrSendMessageAsync(botClient, chatId, messageId,
+                        "🧹 Фильтр удалён.\n\n🎛 Свои фильтры:",
+                        BotKeyboards.OwnFiltersMenu(draft), ct);
+                    break;
+
+                default:
+                    int removeSpecIndex = pendingInput ?? -1;
+                    if (IsSpecIndexValid(draft, removeSpecIndex))
+                    {
+                        var removeSpec = draft.AvailableSpecs[removeSpecIndex];
+                        draft.Filters.RemoveAll(f => string.Equals(f.Key, removeSpec.Key, StringComparison.OrdinalIgnoreCase));
+                        draft.Wizard!.SpecIndex = removeSpecIndex;
+                        await EditOrSendMessageAsync(botClient, chatId, messageId,
+                            $"🧹 Фильтр очищен.\n\n{FilterWizardUI.RenderSpecScreen(draft, removeSpecIndex)}",
+                            BotKeyboards.FilterOptionsMenu(draft, removeSpecIndex), ct);
+                    }
+                    else
+                    {
+                        await EditOrSendMessageAsync(botClient, chatId, messageId,
+                            "⬅️ Ввод отменён.", BotKeyboards.MainMenu(), ct);
+                    }
+                    break;
+            }
+            return;
+        }
+
         // Done with the wizard
         if (data == "fdone")
         {
@@ -917,8 +975,8 @@ public class BotEngine : BackgroundService
             };
 
             await EditOrSendMessageAsync(botClient, chatId, messageId,
-                hint + "\n\n⬇️ Введите одним сообщением (пусто = удалить фильтр):",
-                BotKeyboards.CancelPriceInputMenu(), ct);
+                hint + "\n\n⬇️ Введите одним сообщением:",
+                BotKeyboards.TextInputMenu(), ct);
             return;
         }
 
@@ -2820,7 +2878,7 @@ public class BotEngine : BackgroundService
                 draft.AwaitingFilterInput = pending;
                 await botClient.SendMessage(chatId: chatId,
                     $"❌ {parsed.Error}\nПопробуйте ещё раз (<code>8-32</code>, <code>до 500</code>):",
-                    parseMode: ParseMode.Html, replyMarkup: BotKeyboards.CancelPriceInputMenu(), cancellationToken: ct);
+                    parseMode: ParseMode.Html, replyMarkup: BotKeyboards.TextInputMenu(), cancellationToken: ct);
                 return;
             }
 
@@ -2848,7 +2906,7 @@ public class BotEngine : BackgroundService
             {
                 draft.AwaitingFilterInput = pending;
                 await botClient.SendMessage(chatId: chatId, "❌ Введите значение одним сообщением:",
-                    replyMarkup: BotKeyboards.CancelPriceInputMenu(), cancellationToken: ct);
+                    parseMode: ParseMode.Html, replyMarkup: BotKeyboards.TextInputMenu(), cancellationToken: ct);
                 return;
             }
 

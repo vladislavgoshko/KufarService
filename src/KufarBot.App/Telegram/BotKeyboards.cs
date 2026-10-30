@@ -450,6 +450,14 @@ public static class BotKeyboards
         });
     }
 
+    /// <summary>Input-mode keyboard for text filters. Telegram forbids sending empty
+    /// messages, so clearing the filter is an explicit tap instead of "send nothing".</summary>
+    public static InlineKeyboardMarkup TextInputMenu() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("🗑 Удалить фильтр", "finpclr").Danger() },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Отмена ввода", "menu_draft") }
+    });
+
     /// <summary>eph-17: period switcher for the /admin analytics report.</summary>
     public static InlineKeyboardMarkup AdminStatsMenu(AnalyticsPeriod current)
     {
