@@ -67,6 +67,7 @@ public sealed class SearchPresetCatalog : ISearchPresetCatalog
     {
         try
         {
+            path = ResolveAbsolutePath(path);
             if (!File.Exists(path))
             {
                 return; // empty catalog — feature degrades gracefully
@@ -105,6 +106,21 @@ public sealed class SearchPresetCatalog : ISearchPresetCatalog
             // a broken catalog file must not crash the bot — catalog degrades to empty
             _presets = new List<SearchPreset>();
         }
+    }
+
+    /// <summary>
+    /// Relative paths resolve against the exe/content-root directory (AppContext.BaseDirectory),
+    /// mirroring how appsettings.json is anchored in Program.cs — the process working
+    /// directory may be anywhere (e.g. repo root when launched via dotnet run).
+    /// </summary>
+    private static string ResolveAbsolutePath(string path)
+    {
+        if (Path.IsPathRooted(path) || File.Exists(path))
+        {
+            return path;
+        }
+
+        return Path.Combine(AppContext.BaseDirectory, path);
     }
 
     private static List<SavedFilter> BuildFilters(SearchPresetFileRow r)
