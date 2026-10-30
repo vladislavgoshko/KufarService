@@ -115,18 +115,35 @@ public class BotEngine : BackgroundService
         }
     }
 
-    /// <summary>Loads the persisted draft into the session store when it is not in memory (eph-10).</summary>
+    /// <summary>Loads the persisted draft into the session store when it is not in memory (eph-10).
+    /// Also hot-loads the user's last chosen city (eph-19) even when the draft is live in memory.</summary>
     private async Task LoadDraftFromDbAsync(AppDbContext dbContext, long userId, CancellationToken ct)
     {
-        if (userId == 0 || _sessionStore.GetDraft(userId) != null)
+        if (userId == 0)
         {
             return;
         }
 
         try
         {
-            var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-            var draft = DraftPersistence.Deserialize(user?.DraftJson);
+            var user = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId, ct);
+            if (user == null)
+            {
+                return;
+            }
+
+            // eph-19: last chosen city pre-fills future fresh drafts (also after restarts)
+            if (user.LastCityId.HasValue || !string.IsNullOrEmpty(user.LastCityName))
+            {
+                _sessionStore.SetLastCity(userId, user.LastCityId, user.LastCityName);
+            }
+
+            if (_sessionStore.GetDraft(userId) != null)
+            {
+                return; // draft is already live in memory — nothing to restore
+            }
+
+            var draft = DraftPersistence.Deserialize(user.DraftJson);
             if (draft != null)
             {
                 _sessionStore.SetDraft(userId, draft);
@@ -135,6 +152,26 @@ public class BotEngine : BackgroundService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[BotEngine] Draft restore failed for User={UserId}", userId);
+        }
+    }
+
+    /// <summary>eph-19: persists the user's last chosen city (Users.LastCity*) so fresh
+    /// drafts start with it after restarts too. Failures only log — never break the UI.</summary>
+    private async Task RememberLastCityAsync(AppDbContext dbContext, long userId, int? cityId, string? cityName, CancellationToken ct)
+    {
+        try
+        {
+            var user = await dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            if (user != null && (user.LastCityId != cityId || !string.Equals(user.LastCityName, cityName, StringComparison.Ordinal)))
+            {
+                user.LastCityId = cityId;
+                user.LastCityName = cityName;
+                await dbContext.SaveChangesAsync(ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[BotEngine] Last-city save failed for User={UserId}", userId);
         }
     }
 
@@ -224,6 +261,7 @@ public class BotEngine : BackgroundService
         if (text.Equals("/start", StringComparison.OrdinalIgnoreCase))
         {
             _sessionStore.ResetDraft(message.From.Id);
+            _sessionStore.TakePendingTemplateRename(message.From.Id);
 
             // eph-17: acquisition point for the bot-start -> first-search funnel
             await analytics.RecordAsync(message.From.Id, UsageEventTypes.BotStarted, ct: ct);
@@ -235,6 +273,16 @@ public class BotEngine : BackgroundService
                       "Выберите действие в меню ниже:",
                 parseMode: ParseMode.Html,
                 replyMarkup: BotKeyboards.MainMenu(),
+                cancellationToken: ct
+            );
+
+            // eph-19: pin the quick-nav reply keyboard under the message input
+            await botClient.SendMessage(
+                chatId: chatId,
+                text: "⌨️ <b>Быстрое меню закреплено под полем ввода</b> (не пропадает): " +
+                      "главное меню, создание поиска, готовые поиски и подписки — в одно нажатие.",
+                parseMode: ParseMode.Html,
+                replyMarkup: BotKeyboards.MainReplyKeyboard(),
                 cancellationToken: ct
             );
             return;
@@ -250,6 +298,81 @@ public class BotEngine : BackgroundService
                 replyMarkup: BotKeyboards.MainMenu(),
                 cancellationToken: ct
             );
+            return;
+        }
+
+        // eph-19: reply-keyboard quick navigation. Checked BEFORE input modes — global
+        // navigation beats whatever the wizard was waiting for (rename / price / filter).
+        if (text is BotKeyboards.RkMainMenu or BotKeyboards.RkCreateSearch
+            or BotKeyboards.RkReadySearches or BotKeyboards.RkSubscriptions)
+        {
+            _sessionStore.TakePendingTemplateRename(message.From.Id);
+
+            if (text == BotKeyboards.RkMainMenu)
+            {
+                _sessionStore.ResetDraft(message.From.Id);
+                await botClient.SendMessage(
+                    chatId: chatId,
+                    text: "👋 <b>Главное меню:</b>\n\nВыберите действие:",
+                    parseMode: ParseMode.Html,
+                    replyMarkup: BotKeyboards.MainMenu(),
+                    cancellationToken: ct);
+                return;
+            }
+
+            if (text == BotKeyboards.RkCreateSearch)
+            {
+                var createDraft = _sessionStore.GetOrCreateDraft(userId: message.From.Id);
+                await botClient.SendMessage(
+                    chatId: chatId,
+                    text: $"⚙️ <b>Настройка параметров поиска:</b>\n\n{FormatDraftSummary(createDraft)}",
+                    parseMode: ParseMode.Html,
+                    replyMarkup: BotKeyboards.SearchDraftMenu(createDraft),
+                    cancellationToken: ct);
+                return;
+            }
+
+            if (text == BotKeyboards.RkReadySearches)
+            {
+                await TryRecordFeatureAsync(analytics, userId: message.From.Id, UsageFeatures.PresetCatalogView, "catalog", ct);
+
+                var categories = _presetCatalog.Categories;
+                string catalogText = categories.Count == 0
+                    ? "⚡ <b>Готовые поиски</b>\n\nКаталог временно пуст — загляните позже."
+                    : "⚡ <b>Готовые поиски</b>\n\nВыберите категорию — внутри готовые поисковые запросы, " +
+                      "создающие подписку в пару нажатий без ручной настройки фильтров.";
+
+                await botClient.SendMessage(chatId: chatId, text: catalogText,
+                    parseMode: ParseMode.Html,
+                    replyMarkup: BotKeyboards.PresetCategoriesMenu(categories), cancellationToken: ct);
+                return;
+            }
+
+            // RkSubscriptions
+            var searches = await subscriptionService.GetUserSearchesAsync(message.From.Id, ct);
+            if (searches.Count == 0)
+            {
+                _sessionStore.GetOrCreateDraft(message.From.Id).SubscriptionsPage = 0;                await botClient.SendMessage(
+                    chatId: chatId,
+                    text: "📋 <b>У вас пока нет сохраненных подписок.</b>\n\n" +
+                          "Нажмите кнопку ниже, чтобы создать первое отслеживание!",
+                    parseMode: ParseMode.Html,
+                    replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("➕ Создать поиск", "menu_create") },
+                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "menu_main") }
+                    }),
+                    cancellationToken: ct);
+                return;
+            }
+
+            await botClient.SendMessage(
+                chatId: chatId,
+                text: $"📋 <b>Ваши подписки ({searches.Count}):</b>\n\n" +
+                      "Нажмите на подписку для управления (пауза / удаление):",
+                parseMode: ParseMode.Html,
+                replyMarkup: BotKeyboards.SubscriptionsListMenu(searches, _sessionStore.GetOrCreateDraft(message.From.Id).SubscriptionsPage),
+                cancellationToken: ct);
             return;
         }
 
@@ -425,6 +548,7 @@ public class BotEngine : BackgroundService
         if (data == "menu_main")
         {
             _sessionStore.ResetDraft(userId);
+            _sessionStore.TakePendingTemplateRename(userId);
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 "👋 <b>Главное меню:</b>\n\nВыберите действие:",
                 BotKeyboards.MainMenu(), ct);
@@ -1358,6 +1482,15 @@ public class BotEngine : BackgroundService
                 EditingSearchId = search.Id,
                 Wizard = new FilterWizardState()
             };
+
+            // eph-19: a search saved with "Вся Беларусь" starts editing pre-filled with
+            // the user's last chosen city (visible on the screen — saving applies it).
+            if (search.CityId == null && _sessionStore.GetLastCity(userId) is { } lastCity)
+            {
+                draft.CityId = lastCity.CityId;
+                draft.CityName = lastCity.CityName;
+            }
+
             _sessionStore.SetDraft(userId, draft);
 
             await EnsureFilterSpecsLoadedAsync(botClient, chatId, messageId, draft, ct);
@@ -1457,6 +1590,8 @@ public class BotEngine : BackgroundService
             var draft = _sessionStore.GetOrCreateDraft(userId);
             draft.CityId = null;
             draft.CityName = "Вся Беларусь";
+            _sessionStore.SetLastCity(userId, null, "Вся Беларусь");
+            await RememberLastCityAsync(dbContext, userId, null, "Вся Беларусь", ct);
 
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 $"✅ Регион выбран: <b>Вся Беларусь</b>\n\n{FormatDraftSummary(draft)}",
@@ -1470,6 +1605,8 @@ public class BotEngine : BackgroundService
             var draft = _sessionStore.GetOrCreateDraft(userId);
             draft.CityId = cityId;
             draft.CityName = CityCatalog.GetCityName(cityId) ?? $"Город #{cityId}";
+            _sessionStore.SetLastCity(userId, cityId, draft.CityName);
+            await RememberLastCityAsync(dbContext, userId, cityId, draft.CityName, ct);
 
             await EditOrSendMessageAsync(botClient, chatId, messageId,
                 $"✅ Город выбран: <b>{draft.CityName}</b>\n\n{FormatDraftSummary(draft)}",
@@ -2189,10 +2326,27 @@ public class BotEngine : BackgroundService
         CancellationToken ct)
     {
         var urlFilters = UrlFiltersBuilder.Build(draft.Filters);
+
+        // eph-19: pass the bot's own query to the site as well (query=...) so the preview
+        // searches the SAME page the user sees on kufar.by. Strictly client-side querying
+        // missed old/low-ranked listings: the site reported 13k+ ads while the matching
+        // one sat far below the first fetched page.
+        string? query = string.Join(" ", draft.Filters
+            .Where(f => f.Kind == SavedFilterKind.Query)
+            .SelectMany(f => f.Values)
+            .Where(w => !string.IsNullOrWhiteSpace(w))
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            query = null;
+        }
+
         var criteria = new KufarSearchCriteria
         {
             CategoryId = draft.SubcategoryId,
             AreaId = draft.CityId,
+            Query = query,
             MinPriceByn = draft.MinPriceByn,
             MaxPriceByn = draft.MaxPriceByn,
             UrlFilters = urlFilters.Count > 0 ? urlFilters : null,

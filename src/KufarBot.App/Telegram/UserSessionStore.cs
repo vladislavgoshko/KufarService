@@ -74,13 +74,38 @@ public class UserSessionStore
     public int? TakePendingTemplateRename(long userId) =>
         _pendingTemplateRename.TryRemove(userId, out var id) ? id : null;
 
+    // ===================== eph-19: global "last chosen city" memory =====================
+
+    /// <summary>Last city chosen by the user (eph-19): pre-fills fresh drafts
+    /// (New search after /start or a saved draft), surviving restarts via Users.LastCity*.
+    /// </summary>
+    private readonly ConcurrentDictionary<long, (int? CityId, string? CityName)> _lastCities = new();
+
+    public void SetLastCity(long userId, int? cityId, string? cityName) =>
+        _lastCities[userId] = (cityId, cityName);
+
+    public (int? CityId, string? CityName)? GetLastCity(long userId) =>
+        _lastCities.TryGetValue(userId, out var city) ? city : null;
+
     public UserSearchDraft GetOrCreateDraft(long userId)
     {
         PruneStaleSessions();
-        return _drafts.AddOrUpdate(
+        var draft = _drafts.AddOrUpdate(
             userId,
-            _ => (new UserSearchDraft(), DateTime.UtcNow),
+            _ =>
+            {
+                // a brand-new draft starts with the user's last chosen city (eph-19)
+                var fresh = new UserSearchDraft();
+                if (_lastCities.TryGetValue(userId, out var last))
+                {
+                    fresh.CityId = last.CityId;
+                    fresh.CityName = last.CityName;
+                }
+
+                return (fresh, DateTime.UtcNow);
+            },
             (_, existing) => (existing.Draft, DateTime.UtcNow)).Draft;
+        return draft;
     }
 
     public UserSearchDraft? GetDraft(long userId)

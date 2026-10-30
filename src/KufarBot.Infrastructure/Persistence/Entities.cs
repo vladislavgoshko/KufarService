@@ -14,6 +14,12 @@ public class UserEntity
     /// <summary>eph-10: serialized search draft (search-wizard state) — survives bot restarts.</summary>
     public string? DraftJson { get; set; }
 
+    /// <summary>eph-19: user's last chosen search city — pre-selected at the next create/edit.</summary>
+    public int? LastCityId { get; set; }
+
+    /// <summary>eph-19: display name of the last chosen city (null = «Вся Беларусь»).</summary>
+    public string? LastCityName { get; set; }
+
     public ICollection<UserSearchEntity> Searches { get; set; } = new List<UserSearchEntity>();
     public ICollection<DeliveredAdEntity> DeliveredAds { get; set; } = new List<DeliveredAdEntity>();
     public ICollection<NotificationOutboxEntity> OutboxItems { get; set; } = new List<NotificationOutboxEntity>();

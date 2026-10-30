@@ -12,6 +12,26 @@ namespace KufarBot.App.Telegram;
 
 public static class BotKeyboards
 {
+    // ===================== eph-19: persistent reply keyboard under the message input =====================
+
+    public const string RkMainMenu = "🏠 Главное меню";
+    public const string RkCreateSearch = "🔍 Создать поиск";
+    public const string RkReadySearches = "⚡ Готовые поиски";
+    public const string RkSubscriptions = "📋 Мои подписки";
+
+    /// <summary>Persistent reply keyboard (under the input field): quick access to the
+    /// main sections. Pressing a button sends its text as a message, no extra input needed.</summary>
+    public static ReplyKeyboardMarkup MainReplyKeyboard() => new(new[]
+    {
+        new KeyboardButton[] { RkMainMenu, RkCreateSearch },
+        new KeyboardButton[] { RkReadySearches, RkSubscriptions }
+    })
+    {
+        ResizeKeyboard = true,
+        IsPersistent = true,
+        InputFieldPlaceholder = "Кнопки ниже — для навигации, ввод текста — для цен/фильтров"
+    };
+
     public static string HelpText =>
         "ℹ️ <b>Kufar Мониторинг — справка</b>\n\n" +
         "<b>Команды:</b>\n" +

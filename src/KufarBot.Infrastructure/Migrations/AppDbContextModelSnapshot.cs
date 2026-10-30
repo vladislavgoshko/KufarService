@@ -180,6 +180,12 @@ namespace KufarBot.Infrastructure.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("LastCityId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LastCityName")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Username")
                         .HasColumnType("TEXT");
 
