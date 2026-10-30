@@ -185,7 +185,7 @@ public static class KufarAdNormalizer
             }
 
             string? label = TryNormalizeParameterValue(p.ValueLabel);
-            result.Add(new AdParameter(p.ParameterName.Trim(), value, label));
+            result.Add(new AdParameter(p.ParameterName.Trim(), value, label, p.ParameterUrl));
         }
 
         return result;

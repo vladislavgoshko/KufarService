@@ -66,21 +66,21 @@ public static class SearchMatchingExtensions
                 return ad.ListTimeUtc >= utcNow - TimeSpan.FromHours((double)filter.Min!.Value);
 
             case SavedFilterKind.Bool:
-                return AdParameterValue(ad, filter.Key) == "1" && filter.Values.Contains("1");
+                return AdParameterValue(ad, filter) == "1" && filter.Values.Contains("1");
 
             case SavedFilterKind.Single:
-                return MatchesValue(ad, filter.Key, filter.Values, any: true);
+                return MatchesValue(ad, filter, any: true);
 
             case SavedFilterKind.Multi:
                 return filter.MultiEnabled()
-                    ? MatchesValue(ad, filter.Key, filter.Values, any: true)
-                    : MatchesValue(ad, filter.Key, filter.Values, any: false);
+                    ? MatchesValue(ad, filter, any: true)
+                    : MatchesValue(ad, filter, any: false);
 
             case SavedFilterKind.Range:
-                return MatchesNumericRange(ad, filter.Key, filter.Min, filter.Max);
+                return MatchesNumericRange(ad, filter);
 
             case SavedFilterKind.Text:
-                var adValue = AdParameterValue(ad, filter.Key);
+                var adValue = AdParameterValue(ad, filter);
                 return adValue != null && ContainsIgnoreCase(adValue, filter.Values.FirstOrDefault() ?? "");
 
             default:
@@ -92,34 +92,34 @@ public static class SearchMatchingExtensions
     // (Kufar's multiselect_or); a separate "All" flag can be added later.
     private static bool MultiEnabled(this SavedFilter _) => true;
 
-    private static bool MatchesValue(Advertisement ad, string parameterName, IReadOnlyList<string> expected, bool any)
+    private static bool MatchesValue(Advertisement ad, SavedFilter filter, bool any)
     {
-        var actual = AdParameterValue(ad, parameterName);
+        var actual = AdParameterValue(ad, filter);
         if (actual == null)
         {
             return false;
         }
 
         return any
-            ? expected.Contains(actual, StringComparer.OrdinalIgnoreCase)
-            : expected.All(e => ContainsIgnoreCase(actual, e));
+            ? filter.Values.Contains(actual, StringComparer.OrdinalIgnoreCase)
+            : filter.Values.All(e => ContainsIgnoreCase(actual, e));
     }
 
-    private static bool MatchesNumericRange(Advertisement ad, string parameterName, decimal? min, decimal? max)
+    private static bool MatchesNumericRange(Advertisement ad, SavedFilter filter)
     {
-        var value = AdParameterValue(ad, parameterName);
+        var value = AdParameterValue(ad, filter);
         if (value == null || !decimal.TryParse(value, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out decimal numeric))
         {
             return false;
         }
 
-        if (min.HasValue && numeric < min.Value)
+        if (filter.Min.HasValue && numeric < filter.Min.Value)
         {
             return false;
         }
 
-        if (max.HasValue && numeric > max.Value)
+        if (filter.Max.HasValue && numeric > filter.Max.Value)
         {
             return false;
         }
@@ -127,11 +127,28 @@ public static class SearchMatchingExtensions
         return true;
     }
 
-    private static string? AdParameterValue(Advertisement ad, string parameterName)
+    /// <summary>
+    /// Site-filter value lookup by parameter identity. A saved filter carries either
+    /// the internal parameter name (wizard filters: Key="type", UrlName="typ") or only
+    /// the URL token (eph-18 search presets: Key="typ"); an ad parameter exposes both
+    /// (Name="p", UrlName="pu"). Any matching pair of identifiers resolves the value.
+    /// </summary>
+    private static string? AdParameterValue(Advertisement ad, SavedFilter filter)
     {
         var param = ad.Parameters.FirstOrDefault(p =>
-            string.Equals(p.Name, parameterName, StringComparison.OrdinalIgnoreCase));
+            MatchesParameterIdentity(p, filter.Key) || MatchesParameterIdentity(p, filter.UrlName));
         return param?.Value;
+    }
+
+    private static bool MatchesParameterIdentity(AdParameter parameter, string? identifier)
+    {
+        if (string.IsNullOrEmpty(identifier))
+        {
+            return false;
+        }
+
+        return string.Equals(parameter.Name, identifier, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(parameter.UrlName, identifier, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ContainsIgnoreCase(string source, string fragment)

@@ -243,6 +243,36 @@ public class FilterEngineTests
     }
 
     [Fact]
+    public void Matches_SiteFilter_MatchesByInternalName_AndFallsBackToUrlName()
+    {
+        // Kufar cards carry ad_parameters with both identifiers: internal name ("p":"type")
+        // and URL token ("pu":"typ"). Externally built configurations (eph-18 presets)
+        // store only the URL token, wizard filters — the internal name.
+        var ad = MakeAd("Квартира", price: 300m, parameters: new AdParameter("type", "sell", UrlName: "typ"));
+
+        // internal-name key (wizard filters) — matches by Name
+        var byKey = MakeSearch(new SavedFilter { Kind = SavedFilterKind.Single, Key = "type", UrlName = "typ", Title = "Тип сделки", Values = new[] { "sell" } });
+        Assert.True(byKey.Matches(ad));
+
+        // url-name key (preset filters) — matches by UrlName of the ad parameter
+        var byUrlName = MakeSearch(new SavedFilter { Kind = SavedFilterKind.Single, Key = "typ", UrlName = "typ", Title = "Тип сделки", Values = new[] { "sell" } });
+        Assert.True(byUrlName.Matches(ad));
+
+        // a parameter without UrlName (older cached payloads) still matches the internal name
+        var legacyAd = MakeAd("Квартира", price: 300m, parameters: new AdParameter("type", "sell"));
+        Assert.True(byKey.Matches(legacyAd));
+        Assert.False(byUrlName.Matches(legacyAd));
+
+        // wrong value still fails
+        var byLet = MakeSearch(new SavedFilter { Kind = SavedFilterKind.Single, Key = "typ", UrlName = "typ", Title = "Тип сделки", Values = new[] { "let" } });
+        Assert.False(byLet.Matches(ad));
+
+        // unknown parameter fails as before
+        var unknown = MakeSearch(new SavedFilter { Kind = SavedFilterKind.Single, Key = "zzz", UrlName = "zzz", Title = "Неизвестное", Values = new[] { "sell" } });
+        Assert.False(unknown.Matches(ad));
+    }
+
+    [Fact]
     public void Matches_KeywordsIncludeExclude()
     {
         var search = MakeSearch(
