@@ -96,7 +96,8 @@ public class BotEngine : BackgroundService
 
                 // eph-10: restore the persisted draft so restarts don't lose wizard state
                 await LoadDraftFromDbAsync(dbContext, telegramUserId, ct);
-                await HandleMessageAsync(botClient, dbContext, subscriptionService, categoryService, analytics, update.Message, ct);
+                var kufarClient = scope.ServiceProvider.GetRequiredService<IKufarApiClient>();
+                await HandleMessageAsync(botClient, dbContext, subscriptionService, categoryService, kufarClient, analytics, update.Message, ct);
                 await SaveDraftToDbAsync(dbContext, telegramUserId, ct);
             }
             else if (update.Type == UpdateType.CallbackQuery && update.CallbackQuery != null)
@@ -244,6 +245,7 @@ public class BotEngine : BackgroundService
         AppDbContext dbContext,
         ISearchSubscriptionService subscriptionService,
         ICategoryService categoryService,
+        IKufarApiClient kufarClient,
         IUsageAnalytics analytics,
         Message message,
         CancellationToken ct)
@@ -352,7 +354,7 @@ public class BotEngine : BackgroundService
             var searches = await subscriptionService.GetUserSearchesAsync(message.From.Id, ct);
             if (searches.Count == 0)
             {
-                _sessionStore.GetOrCreateDraft(message.From.Id).SubscriptionsPage = 0;                await botClient.SendMessage(
+                _sessionStore.GetOrCreateDraft(message.From.Id).SubscriptionsPage = 0; await botClient.SendMessage(
                     chatId: chatId,
                     text: "📋 <b>У вас пока нет сохраненных подписок.</b>\n\n" +
                           "Нажмите кнопку ниже, чтобы создать первое отслеживание!",
@@ -463,10 +465,19 @@ public class BotEngine : BackgroundService
             return;
         }
 
+        // Проверка: отправил ли пользователь ссылку или ID объявления Kufar для добавления в избранное
+        if (TryParseAdIdFromInput(text, out long inputAdId))
+        {
+            await AddAdToFavoritesAsync(
+                botClient, dbContext, kufarClient, analytics,
+                chatId, messageId: 0, message.From.Id, inputAdId, ct);
+            return;
+        }
+
         // Unknown text message fallback
         await botClient.SendMessage(
             chatId: chatId,
-            text: "Используйте меню для навигации:",
+            text: "Используйте меню для навигации или отправьте ссылку на объявление Kufar для добавления в избранное:",
             replyMarkup: BotKeyboards.MainMenu(),
             cancellationToken: ct
         );
@@ -577,74 +588,25 @@ public class BotEngine : BackgroundService
                 .ToListAsync(ct);
 
             string text = favorites.Count == 0
-                ? "⭐ <b>Избранное</b>\n\nПока пусто. Добавляйте объявления кнопкой «⭐ В избранное» под новыми объявлениями — бот будет следить за ценой и исчезновением."
-                : $"⭐ <b>Избранное</b> — {favorites.Count} объявл.\n\nОтслеживается снижение цены и удаление с Kufar.";
+                ? "⭐ <b>Избранное</b>\n\nПока пусто.\n\n" +
+                  "Чтобы добавить объявление:\n" +
+                  "• Нажмите «⭐ В избранное» под уведомлением бота\n" +
+                  "• Либо просто <b>отправьте ссылку на объявление</b> из Kufar сообщением в этот чат."
+                : $"⭐ <b>Избранное</b> — {favorites.Count} объявл.\n\n" +
+                  "Отслеживается снижение цены и удаление с Kufar.\n" +
+                  "<i>Вы можете отправить ссылку на любое объявление, чтобы добавить его сюда.</i>";
             await EditOrSendMessageAsync(botClient, chatId, messageId, text, BotKeyboards.FavoritesMenu(favorites), ct);
             return;
         }
 
         if (data.StartsWith("fav_") && long.TryParse(data.Substring(4), out long favAdId))
         {
-            var existing = await dbContext.WatchedAds
-                .FirstOrDefaultAsync(w => w.UserId == userId && w.AdId == favAdId, ct);
-
-            if (existing != null)
-            {
-                await EditOrSendMessageAsync(botClient, chatId, messageId,
-                    $"⭐ <b>Уже в избранном</b>\n\n{System.Net.WebUtility.HtmlEncode(existing.Title)}\n" +
-                    (existing.LastPriceByn.HasValue ? $"💰 {existing.LastPriceByn.Value:0.##} BYN\n" : "") +
-                    $"\nСледим за ценой и наличием.",
-                    new InlineKeyboardMarkup(new[]
-                    {
-                        new[] { InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav") },
-                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
-                    }),
-                    ct);
-                return;
-            }
-
-            Advertisement? details = await kufarClient.GetAdDetailsAsync(favAdId, ct);
-            if (details == null)
-            {
-                await EditOrSendMessageAsync(botClient, chatId, messageId,
-                    "❌ Объявление недоступно на Kufar — добавить в избранное нельзя.",
-                    new InlineKeyboardMarkup(new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }),
-                    ct);
-                return;
-            }
-
-            dbContext.WatchedAds.Add(new WatchedAdEntity
-            {
-                UserId = userId,
-                AdId = favAdId,
-                Title = details.Title,
-                AdLink = details.AdLink,
-                ImageUrl = details.ImageUrl,
-                Location = details.Location,
-                LastPriceByn = details.PriceByn,
-                LastCheckedUtc = DateTime.UtcNow,
-                NotifiedMissing = false,
-                CreatedAtUtc = DateTime.UtcNow
-            });
-            await dbContext.SaveChangesAsync(ct);
-
-            await TryRecordFeatureAsync(analytics, userId, UsageFeatures.Favorite, $"ad:{favAdId}", ct);
-
-            await EditOrSendMessageAsync(botClient, chatId, messageId,
-                $"✅ <b>Добавлено в избранное!</b>\n\n" +
-                $"<b>{System.Net.WebUtility.HtmlEncode(details.Title)}</b>\n" +
-                $"💰 {System.Net.WebUtility.HtmlEncode(details.FormattedPrice)}\n" +
-                $"📍 {System.Net.WebUtility.HtmlEncode(details.Location)}\n\n" +
-                "Следим за ценой и наличием — сообщим об изменениях.",
-                new InlineKeyboardMarkup(new[]
-                {
-                    new[] { InlineKeyboardButton.WithCallbackData("📖 Открыть объявление", $"open_{favAdId}").Primary() },
-                    new[] { InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav") },
-                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
-                }),
-                ct);
+            await AddAdToFavoritesAsync(
+                botClient, dbContext, kufarClient, analytics,
+                chatId, messageId, userId, favAdId, ct);
             return;
         }
+    
 
         if (data.StartsWith("unfav_") && long.TryParse(data.Substring(6), out long unfavAdId))
         {
@@ -1541,14 +1503,6 @@ public class BotEngine : BackgroundService
                 Wizard = new FilterWizardState()
             };
 
-            // eph-19: a search saved with "Вся Беларусь" starts editing pre-filled with
-            // the user's last chosen city (visible on the screen — saving applies it).
-            if (search.CityId == null && _sessionStore.GetLastCity(userId) is { } lastCity)
-            {
-                draft.CityId = lastCity.CityId;
-                draft.CityName = lastCity.CityName;
-            }
-
             _sessionStore.SetDraft(userId, draft);
 
             await EnsureFilterSpecsLoadedAsync(botClient, chatId, messageId, draft, ct);
@@ -2007,7 +1961,106 @@ public class BotEngine : BackgroundService
                $"💰 Цена: <b>{priceStr}</b>\n" +
                $"{filtersStr}\n";
     }
+    private static bool TryParseAdIdFromInput(string input, out long adId)
+    {
+        adId = 0;
+        if (string.IsNullOrWhiteSpace(input)) return false;
 
+        input = input.Trim();
+
+        // Если пользователь просто прислал числовой ID объявления
+        if (long.TryParse(input, out adId) && adId > 0)
+        {
+            return true;
+        }
+
+        // Если это URL kufar.by
+        if (Uri.TryCreate(input, UriKind.Absolute, out Uri? uri) &&
+            uri.Host.Contains("kufar.by", StringComparison.OrdinalIgnoreCase))
+        {
+            // Ссылки вида /item/123456789, /vi/123456789, /itemnew/123456789
+            string[] segments = uri.AbsolutePath.Trim('/').Split('/');
+            foreach (var segment in segments)
+            {
+                if (long.TryParse(segment, out adId) && adId > 0)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+    private async Task AddAdToFavoritesAsync(
+    ITelegramBotClient botClient,
+    AppDbContext dbContext,
+    IKufarApiClient kufarClient,
+    IUsageAnalytics analytics,
+    long chatId,
+    int messageId,
+    long userId,
+    long favAdId,
+    CancellationToken ct)
+    {
+        var existing = await dbContext.WatchedAds
+            .FirstOrDefaultAsync(w => w.UserId == userId && w.AdId == favAdId, ct);
+
+        if (existing != null)
+        {
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                $"⭐ <b>Уже в избранном</b>\n\n{System.Net.WebUtility.HtmlEncode(existing.Title)}\n" +
+                (existing.LastPriceByn.HasValue ? $"💰 {existing.LastPriceByn.Value:0.##} BYN\n" : "") +
+                $"\nСледим за ценой и наличием.",
+                new InlineKeyboardMarkup(new[]
+                {
+                new[] { InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav") },
+                new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
+                }),
+                ct);
+            return;
+        }
+
+        Advertisement? details = await kufarClient.GetAdDetailsAsync(favAdId, ct);
+        if (details == null)
+        {
+            await EditOrSendMessageAsync(botClient, chatId, messageId,
+                "❌ Объявление не найдено или недоступно на Kufar.",
+                new InlineKeyboardMarkup(new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }),
+                ct);
+            return;
+        }
+
+        dbContext.WatchedAds.Add(new WatchedAdEntity
+        {
+            UserId = userId,
+            AdId = favAdId,
+            Title = details.Title,
+            AdLink = details.AdLink,
+            ImageUrl = details.ImageUrl,
+            Location = details.Location,
+            LastPriceByn = details.PriceByn,
+            LastCheckedUtc = DateTime.UtcNow,
+            NotifiedMissing = false,
+            CreatedAtUtc = DateTime.UtcNow
+        });
+        await dbContext.SaveChangesAsync(ct);
+
+        await TryRecordFeatureAsync(analytics, userId, UsageFeatures.Favorite, $"ad:{favAdId}", ct);
+
+        await EditOrSendMessageAsync(botClient, chatId, messageId,
+            $"✅ <b>Добавлено в избранное!</b>\n\n" +
+            $"<b>{System.Net.WebUtility.HtmlEncode(details.Title)}</b>\n" +
+            $"💰 {System.Net.WebUtility.HtmlEncode(details.FormattedPrice)}\n" +
+            $"📍 {System.Net.WebUtility.HtmlEncode(details.Location)}\n\n" +
+            "Следим за ценой и наличием — сообщим об изменениях.",
+            new InlineKeyboardMarkup(new[]
+            {
+            new[] { InlineKeyboardButton.WithCallbackData("📖 Открыть объявление", $"open_{favAdId}").Primary() },
+            new[] { InlineKeyboardButton.WithCallbackData("⭐ Избранное", "menu_fav") },
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ В главное меню", "menu_main") }
+            }),
+            ct);
+    }
     // ===================== Filter wizard helpers =====================
 
     private async Task EnsureFilterSpecsLoadedAsync(
