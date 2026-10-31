@@ -2521,6 +2521,19 @@ public class BotEngine : BackgroundService
             header + $"✅ Подходящих объявлений (первая страница выдачи): <b>{matches.Count}</b>\n"
         };
 
+        // eph-19: hot-search warning — the first page is newest-first, so counting the
+        // listings from the last 24h estimates the daily inflow the subscription will
+        // deliver. A full-page-fresh search will spam notifications; suggest narrowing.
+        int freshAds = matches.Count(ad => nowUtc >= ad.ListTimeUtc && nowUtc - ad.ListTimeUtc <= TimeSpan.FromHours(24));
+        if (freshAds >= 20)
+        {
+            string inflow = freshAds >= matches.Count ? $"{freshAds}+" : $"~{freshAds}";
+            lines.Add(
+                "🔥 <b>Этот поиск очень активный</b>\n" +
+                $"За последние сутки вышло {inflow} новых объявлений — уведомления будут приходить постоянно.\n" +
+                "<i>Добавьте фильтры (цена, город, характеристики, ключевые слова), чтобы сузить поиск.</i>");
+        }
+
         for (int i = 0; i < top.Count; i++)
         {
             var ad = top[i];
