@@ -1661,9 +1661,34 @@ public class BotEngine : BackgroundService
         }
 
         // Draft: Save Subscription
-        if (data == "draft_save")
+        // eph-19: save confirmation for "hot" drafts. Runs once per draft (HotWarningShown)
+        // so repeatedly saving a still-hot, narrowed search does not nag again.
+        if (data is "draft_save" or "draft_save_go")
         {
             var draft = _sessionStore.GetDraft(userId);
+
+            if (data == "draft_save" && draft != null && draft.SubcategoryId.HasValue &&
+                !(draft.MinPriceByn.HasValue && draft.MaxPriceByn.HasValue && draft.MinPriceByn.Value > draft.MaxPriceByn.Value))
+            {
+                int? inflow = await EstimateDailyInflowAsync(kufarClient, draft, ct);
+                if (inflow >= HotInflowThreshold && !draft.HotWarningShown)
+                {
+                    draft.HotWarningShown = true;
+                    string inflowText = inflow >= 50 ? "50+" : $"~{inflow}";
+                    await EditOrSendMessageAsync(botClient, chatId, messageId,
+                        $"🔥 <b>Этот поиск очень активный</b>\n\n" +
+                        $"За последние сутки вышло {inflowText} новых подходящих объявлений — уведомления будут приходить очень часто.\n\n" +
+                        "<i>Добавьте фильтры, чтобы сузить поиск, или сохраните как есть.</i>",
+                        new InlineKeyboardMarkup(new[]
+                        {
+                            new[] { InlineKeyboardButton.WithCallbackData("✔️ Всё равно сохранить", "draft_save_go").Success() },
+                            new[] { InlineKeyboardButton.WithCallbackData("🎛 Добавить фильтры", "fmenu") },
+                            new[] { InlineKeyboardButton.WithCallbackData("⬅️ К черновику", "menu_draft") }
+                        }), ct);
+                    return;
+                }
+            }
+
             if (draft == null || !draft.SubcategoryId.HasValue)
             {
                 await EditOrSendMessageAsync(botClient, chatId, messageId,
@@ -2428,6 +2453,52 @@ public class BotEngine : BackgroundService
     /// with URL filters applied server-side, then re-checks every draft filter client-side
     /// (exactly as subscription delivery does) and shows the top matches.
     /// </summary>
+    /// <summary>eph-19: daily-inflow threshold for the "hot search" warning.</summary>
+    private const int HotInflowThreshold = 20;
+
+    /// <summary>eph-19: estimates the daily inflow of a draft by counting the last-24h
+    /// ads on the newest-first first page (same request shape as the preview).
+    /// Returns null when the site request fails — the save flow then proceeds silently.</summary>
+    private async Task<int?> EstimateDailyInflowAsync(IKufarApiClient kufarClient, UserSearchDraft draft, CancellationToken ct)
+    {
+        try
+        {
+            var urlFilters = UrlFiltersBuilder.Build(draft.Filters);
+            var criteria = new KufarSearchCriteria
+            {
+                CategoryId = draft.SubcategoryId,
+                AreaId = draft.CityId,
+                Query = ComposeQueryFromFilters(draft),
+                MinPriceByn = draft.MinPriceByn,
+                MaxPriceByn = draft.MaxPriceByn,
+                UrlFilters = urlFilters.Count > 0 ? urlFilters : null,
+                Size = 50,
+                Sort = "lst.d"
+            };
+
+            KufarSearchResult result = await kufarClient.SearchAsync(criteria, ct);
+            DateTime nowUtc = DateTime.UtcNow;
+            return result.Ads.Count(ad => nowUtc >= ad.ListTimeUtc && nowUtc - ad.ListTimeUtc <= TimeSpan.FromHours(24));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[BotEngine] Hot-search inflow estimate failed — proceeding without the warning.");
+            return null;
+        }
+    }
+
+    /// <summary>eph-19: words of the draft's bot-side query filters, joined for the site-side query parameter.</summary>
+    private static string? ComposeQueryFromFilters(UserSearchDraft draft)
+    {
+        string? joined = string.Join(" ", draft.Filters
+            .Where(f => f.Kind == SavedFilterKind.Query)
+            .SelectMany(f => f.Values)
+            .Where(w => !string.IsNullOrWhiteSpace(w))
+            .Distinct(StringComparer.OrdinalIgnoreCase));
+
+        return string.IsNullOrWhiteSpace(joined) ? null : joined;
+    }
+
     private async Task SendDraftPreviewAsync(
         ITelegramBotClient botClient,
         long chatId,
@@ -2442,16 +2513,7 @@ public class BotEngine : BackgroundService
         // searches the SAME page the user sees on kufar.by. Strictly client-side querying
         // missed old/low-ranked listings: the site reported 13k+ ads while the matching
         // one sat far below the first fetched page.
-        string? query = string.Join(" ", draft.Filters
-            .Where(f => f.Kind == SavedFilterKind.Query)
-            .SelectMany(f => f.Values)
-            .Where(w => !string.IsNullOrWhiteSpace(w))
-            .Distinct(StringComparer.OrdinalIgnoreCase));
-
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            query = null;
-        }
+        string? query = ComposeQueryFromFilters(draft);
 
         var criteria = new KufarSearchCriteria
         {
@@ -2525,7 +2587,7 @@ public class BotEngine : BackgroundService
         // listings from the last 24h estimates the daily inflow the subscription will
         // deliver. A full-page-fresh search will spam notifications; suggest narrowing.
         int freshAds = matches.Count(ad => nowUtc >= ad.ListTimeUtc && nowUtc - ad.ListTimeUtc <= TimeSpan.FromHours(24));
-        if (freshAds >= 20)
+        if (freshAds >= HotInflowThreshold)
         {
             string inflow = freshAds >= matches.Count ? $"{freshAds}+" : $"~{freshAds}";
             lines.Add(

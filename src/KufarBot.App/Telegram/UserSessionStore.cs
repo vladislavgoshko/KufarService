@@ -44,6 +44,10 @@ public class UserSearchDraft
     /// <summary>Preset that seeded this draft, if any (eph-18: lets draft_save attribute the creation).</summary>
     public string? PresetId { get; set; }
 
+    /// <summary>eph-19: hot-search warning was already shown for this draft — show it once,
+    /// repeating it when the user narrows filters but the search stays hot is just nagging.</summary>
+    public bool HotWarningShown { get; set; }
+
     /// <summary>Current page of the subscriptions list (8 per page).</summary>
     public int SubscriptionsPage { get; set; }
 }
